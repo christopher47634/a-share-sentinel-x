@@ -9,19 +9,16 @@
     "verify": "tsc --noEmit && next build",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run"
   },
   "dependencies": {
-    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "echarts": "^6.1.0",
-    "echarts-for-react": "^3.0.6",
     "framer-motion": "^12.40.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.20.0",
     "next": "^15.5.16",
-    "openai": "^6.44.0",
-    "playwright": "^1.61.0",
     "react": "^18",
     "react-dom": "^18",
     "tailwind-merge": "^3.6.0",
@@ -35,6 +32,7 @@
     "eslint-config-next": "^15.5.16",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }
