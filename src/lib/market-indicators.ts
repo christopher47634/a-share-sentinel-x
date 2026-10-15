@@ -27,17 +27,25 @@ function ema(values: number[], period: number): number[] {
   return result;
 }
 
-function rsi(values: number[], period = 14): number | null {
+/** Wilder 平滑 RSI（与通达信、同花顺等行情软件一致）：先用前 period 根取简单平均，之后递推平滑 */
+export function rsi(values: number[], period = 14): number | null {
   if (values.length <= period) return null;
-  let gains = 0;
-  let losses = 0;
-  for (let i = values.length - period; i < values.length; i += 1) {
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i += 1) {
     const diff = values[i] - values[i - 1];
-    if (diff >= 0) gains += diff;
-    else losses += Math.abs(diff);
+    if (diff >= 0) avgGain += diff;
+    else avgLoss -= diff;
   }
-  if (losses === 0) return 100;
-  const rs = gains / losses;
+  avgGain /= period;
+  avgLoss /= period;
+  for (let i = period + 1; i < values.length; i += 1) {
+    const diff = values[i] - values[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
   return round(100 - 100 / (1 + rs));
 }
 

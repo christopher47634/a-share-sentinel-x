@@ -17,6 +17,9 @@
  * Pages and components should call these engines instead of duplicating logic.
  */
 
+import { ALERT, MARKET, POSITION, RISK_LEVEL_CUTOFF, RISK_WEIGHT, SIGNAL } from "./thresholds";
+import { shanghaiDate } from "./time";
+
 export type MarketRegime =
   | "全面强势"
   | "结构性强势"
@@ -326,13 +329,7 @@ export function marketRadarEngine(input: MarketSnapshotInput): MarketRadarResult
   const marketRegime = detectMarketRegime(marketTemperature);
   const marketStyle = detectMarketStyle(input);
 
-  const hotSectors = sectors
-    .map((sector) => ({
-      ...sector,
-      heatScore: calculateSectorHeatScore(sector),
-    }))
-    .sort((a, b) => safeNumber(b.heatScore) - safeNumber(a.heatScore))
-    .slice(0, 10);
+  const hotSectors = rankSectorsByHeat(sectors).slice(0, 10);
 
   const weakSectors = sectors.slice().sort((a, b) => a.changePct - b.changePct).slice(0, 10);
 
@@ -407,6 +404,13 @@ function detectMarketRegime(score: number): MarketRegime {
   return "恐慌下跌";
 }
 
+/** 雷达和信号引擎共用的板块排名：按 heatScore 从高到低 */
+export function rankSectorsByHeat(sectors: SentinelSector[]): SentinelSector[] {
+  return sectors
+    .map((sector) => ({ ...sector, heatScore: calculateSectorHeatScore(sector) }))
+    .sort((a, b) => safeNumber(b.heatScore) - safeNumber(a.heatScore));
+}
+
 function calculateSectorHeatScore(sector: SentinelSector): number {
   const total = Math.max(sector.upCount + sector.downCount, 1);
   const upRatio = sector.upCount / total;
@@ -454,9 +458,9 @@ function generateMarketRiskSignals(args: {
   account?: SentinelAccount;
 }): string[] {
   const signals: string[] = [];
-  const strongStocks = args.stocks.filter((stock) => stock.changePct >= 7);
-  const weakStocks = args.stocks.filter((stock) => stock.changePct <= -5);
-  const highVolumeStocks = args.stocks.filter((stock) => safeNumber(stock.volumeRatio) >= 3);
+  const strongStocks = args.stocks.filter((stock) => stock.changePct >= MARKET.STRONG_STOCK_PCT);
+  const weakStocks = args.stocks.filter((stock) => stock.changePct <= MARKET.WEAK_STOCK_PCT);
+  const highVolumeStocks = args.stocks.filter((stock) => safeNumber(stock.volumeRatio) >= MARKET.HIGH_VOLUME_RATIO);
 
   if (args.marketTemperature < 35) {
     signals.push("市场温度偏低，整体风险偏好不足");
@@ -466,7 +470,9 @@ function generateMarketRiskSignals(args: {
     signals.push("下跌家数明显多于上涨家数，市场宽度偏弱");
   }
 
-  if (weakStocks.length >= strongStocks.length && weakStocks.length > 0) {
+  // 样本很小时「大跌 1 只、大涨 0 只」也会触发，所以要求大跌个股多于大涨个股且占到一定比例
+  const weakShareFloor = Math.max(2, Math.ceil(args.stocks.length * MARKET.WEAK_STOCK_SHARE));
+  if (weakStocks.length > strongStocks.length && weakStocks.length >= weakShareFloor) {
     signals.push("大跌个股数量偏多，需关注亏钱效应扩散");
   }
 
@@ -475,7 +481,7 @@ function generateMarketRiskSignals(args: {
   }
 
   if (args.account) {
-    const concentrated = args.account.positions.filter((position) => position.positionRatio >= 0.3);
+    const concentrated = args.account.positions.filter((position) => position.positionRatio >= POSITION.SINGLE_HIGH);
     if (concentrated.length > 0) {
       signals.push(`组合存在单股集中度风险：${concentrated.map((item) => item.name).join("、")}`);
     }
@@ -515,17 +521,17 @@ export function signalEngine(args: {
 }): Signal[] {
   const signals: Signal[] = [];
   const sectorRankMap = new Map<string, number>();
-  const hotSectors = args.sectors.slice().sort((a, b) => b.changePct - a.changePct);
-
-  hotSectors.forEach((sector, index) => {
+  const sectorByName = new Map(args.sectors.map((sector) => [sector.name, sector]));
+  // 与市场雷达同一口径：按 heatScore 排「热度第 N」，而不是按原始涨跌幅
+  rankSectorsByHeat(args.sectors).forEach((sector, index) => {
     sectorRankMap.set(sector.name, index + 1);
   });
 
   const thresholds = {
-    upPct: args.userThresholds?.upPct ?? 5,
-    downPct: args.userThresholds?.downPct ?? -3,
-    volumeRatio: args.userThresholds?.volumeRatio ?? 2.5,
-    turnoverRate: args.userThresholds?.turnoverRate ?? 8,
+    upPct: args.userThresholds?.upPct ?? SIGNAL.UP_PCT,
+    downPct: args.userThresholds?.downPct ?? SIGNAL.DOWN_PCT,
+    volumeRatio: args.userThresholds?.volumeRatio ?? SIGNAL.VOLUME_RATIO,
+    turnoverRate: args.userThresholds?.turnoverRate ?? SIGNAL.TURNOVER_RATE,
   };
 
   for (const stock of args.stocks) {
@@ -614,12 +620,23 @@ export function signalEngine(args: {
       pushSignal("冲高回落风险", "RISK", 25, [`涨幅 ${pct(stock.changePct)} 后涨速转负，存在冲高回落风险`]);
     }
 
-    if (sectorRank && sectorRank <= 10 && stock.changePct > 0) {
+    const sectorData = sector ? sectorByName.get(sector) : undefined;
+
+    if (sectorRank && sectorRank <= SIGNAL.HOT_SECTOR_RANK && stock.changePct > 0) {
       pushSignal("板块共振", "SECTOR", 20, [`所属行业 ${sector} 位列热度第 ${sectorRank}，个股同步上涨 ${pct(stock.changePct)}`]);
     }
 
-    if (sectorRank && sectorRank <= 10 && stock.changePct <= 0) {
-      pushSignal("弱于板块", "SECTOR", 20, [`所属行业 ${sector} 位列热度第 ${sectorRank}，但个股未跟随上涨`]);
+    // 只在板块本身上涨、个股明显落后于板块时触发；以前所有 ≤0 的股票都会命中
+    if (
+      sectorRank &&
+      sectorRank <= SIGNAL.HOT_SECTOR_RANK &&
+      sectorData &&
+      sectorData.changePct > 0 &&
+      stock.changePct < sectorData.changePct - SIGNAL.WEAKER_THAN_SECTOR_PCT
+    ) {
+      pushSignal("弱于板块", "SECTOR", 20, [
+        `所属行业 ${sector} 位列热度第 ${sectorRank}（板块 ${pct(sectorData.changePct)}），个股仅 ${pct(stock.changePct)}`,
+      ]);
     }
 
     if (args.marketRadar?.marketRegime === "弱势调整" && stock.changePct > 3) {
@@ -638,12 +655,16 @@ export function signalEngine(args: {
       pushSignal("持仓股放量下跌", "RISK", 25, [`持仓股下跌 ${pct(stock.changePct)}，量比 ${safeNumber(stock.volumeRatio).toFixed(2)}`]);
     }
 
-    if (position && position.positionRatio >= 0.3) {
-      pushSignal("单股仓位超过30%", "POSITION", 15, [`${position.name} 仓位 ${pct(position.positionRatio * 100)}`]);
+    if (position && position.positionRatio >= POSITION.SINGLE_HIGH) {
+      pushSignal(`单股仓位超过${Math.round(POSITION.SINGLE_HIGH * 100)}%`, "POSITION", 15, [
+        `${position.name} 仓位 ${pct(position.positionRatio * 100)}`,
+      ]);
     }
 
-    if (position?.riskLevel === "High" && position.positionRatio >= 0.2) {
-      pushSignal("高风险股票仓位超过20%", "RISK", 25, [`${position.name} 风险等级 High，仓位 ${pct(position.positionRatio * 100)}`]);
+    if (position?.riskLevel === "High" && position.positionRatio >= POSITION.HIGH_RISK_STOCK) {
+      pushSignal(`高风险股票仓位超过${Math.round(POSITION.HIGH_RISK_STOCK * 100)}%`, "RISK", 25, [
+        `${position.name} 风险等级 High，仓位 ${pct(position.positionRatio * 100)}`,
+      ]);
     }
 
     if (position?.plan && /不追高|等待回调|回调/.test(position.plan) && stock.changePct >= 5) {
@@ -678,7 +699,7 @@ export function alertEngine(args: {
   previousAlerts?: Alert[];
   dedupeWindowMinutes?: number;
 }): Alert[] {
-  const dedupeWindowMs = (args.dedupeWindowMinutes ?? 10) * 60 * 1000;
+  const dedupeWindowMs = (args.dedupeWindowMinutes ?? ALERT.DEDUPE_WINDOW_MINUTES) * 60 * 1000;
   const previous = args.previousAlerts ?? [];
   const grouped = new Map<string, Signal[]>();
 
@@ -702,15 +723,14 @@ export function alertEngine(args: {
 
     const level: AlertLevel = hasRisk ? "Risk" : score >= 80 ? "High" : score >= 60 ? "Medium" : "Low";
 
-    const duplicate = previous.some((alert) => {
-      const created = new Date(alert.createdAt).getTime();
-      const closeInTime = Date.now() - created <= dedupeWindowMs;
-      const sameCode = alert.code === code;
-      const sameSignal = alert.signals.some((existing) =>
-        signals.some((current) => current.signalName === existing.signalName),
-      );
-      return sameCode && sameSignal && closeInTime;
-    });
+    // 窗口内同一代码已经提醒过的信号名；只有当前信号全部提醒过才算重复。
+    // 以前是「任一信号名相同就整条丢弃」，新出现的风险信号会被旧的放量信号吞掉。
+    const recentlyAlerted = new Set(
+      previous
+        .filter((alert) => alert.code === code && Date.now() - new Date(alert.createdAt).getTime() <= dedupeWindowMs)
+        .flatMap((alert) => alert.signals.map((existing) => existing.signalName)),
+    );
+    const duplicate = signals.every((signal) => recentlyAlerted.has(signal.signalName));
 
     if (duplicate) continue;
 
@@ -805,7 +825,7 @@ export function riskEngine(args: {
   const positions = args.account.positions;
 
   for (const position of positions) {
-    if (position.positionRatio >= 0.35) {
+    if (position.positionRatio >= POSITION.SINGLE_HIGH) {
       riskItems.push({
         id: `risk-concentration-${position.code}`,
         level: "High",
@@ -815,7 +835,7 @@ export function riskEngine(args: {
         evidence: [`仓位 ${pct(position.positionRatio * 100)}`],
         observationPoints: ["观察该持仓是否出现放量下跌", "观察该持仓所属板块是否走弱"],
       });
-    } else if (position.positionRatio >= 0.25) {
+    } else if (position.positionRatio >= POSITION.SINGLE_WATCH) {
       riskItems.push({
         id: `risk-concentration-medium-${position.code}`,
         level: "Medium",
@@ -827,7 +847,7 @@ export function riskEngine(args: {
       });
     }
 
-    if (position.riskLevel === "High" && position.positionRatio >= 0.2) {
+    if (position.riskLevel === "High" && position.positionRatio >= POSITION.HIGH_RISK_STOCK) {
       riskItems.push({
         id: `risk-high-vol-${position.code}`,
         level: "High",
@@ -842,7 +862,7 @@ export function riskEngine(args: {
 
   const sectorExposure = calculateSectorExposure(positions);
   for (const [sector, exposure] of sectorExposure.entries()) {
-    if (exposure >= 0.5) {
+    if (exposure >= POSITION.SECTOR_HIGH) {
       riskItems.push({
         id: `risk-sector-${sector}`,
         level: "High",
@@ -857,7 +877,7 @@ export function riskEngine(args: {
 
   if (args.marketRadar && ["弱势调整", "恐慌下跌"].includes(args.marketRadar.marketRegime)) {
     const positionRatio = args.account.marketValue / Math.max(args.account.totalAsset, 1);
-    if (positionRatio >= 0.7) {
+    if (positionRatio >= POSITION.WEAK_MARKET_TOTAL) {
       riskItems.push({
         id: "risk-market-high-position",
         level: "Critical",
@@ -883,16 +903,15 @@ export function riskEngine(args: {
     });
   }
 
-  const rawRiskScore = riskItems.reduce((sum, item) => {
-    if (item.level === "Critical") return sum + 35;
-    if (item.level === "High") return sum + 25;
-    if (item.level === "Medium") return sum + 15;
-    return sum + 8;
-  }, 0);
-
-  const riskScore = clamp(rawRiskScore);
+  const riskScore = clamp(scoreRiskItems(riskItems));
   const overallRiskLevel: RiskLevel =
-    riskScore >= 80 ? "Critical" : riskScore >= 55 ? "High" : riskScore >= 30 ? "Medium" : "Low";
+    riskScore >= RISK_LEVEL_CUTOFF.Critical
+      ? "Critical"
+      : riskScore >= RISK_LEVEL_CUTOFF.High
+        ? "High"
+        : riskScore >= RISK_LEVEL_CUTOFF.Medium
+          ? "Medium"
+          : "Low";
 
   const explanation =
     riskItems.length === 0
@@ -914,6 +933,31 @@ export function riskEngine(args: {
       "盘后复盘交易计划是否被执行",
     ],
   };
+}
+
+/**
+ * 同一只重仓股以前会同时计入「单股集中度」「高风险持仓」「行业集中度」三项，分数很快饱和到 100。
+ * 现在：只涉及单只持仓的风险项按持仓去重、只取最高一项；
+ * 行业项只在它覆盖的持仓还没被单股项计过分时才计分；账户级风险项照常累加。
+ */
+export function scoreRiskItems(riskItems: RiskItem[]): number {
+  const perPosition = new Map<string, number>();
+  let total = 0;
+
+  for (const item of riskItems) {
+    if (item.id.startsWith("risk-concentration") || item.id.startsWith("risk-high-vol")) {
+      const key = item.affectedPositions[0] ?? item.id;
+      perPosition.set(key, Math.max(perPosition.get(key) ?? 0, RISK_WEIGHT[item.level]));
+    }
+  }
+  for (const weight of perPosition.values()) total += weight;
+
+  for (const item of riskItems) {
+    if (item.id.startsWith("risk-concentration") || item.id.startsWith("risk-high-vol")) continue;
+    if (item.id.startsWith("risk-sector-") && item.affectedPositions.every((name) => perPosition.has(name))) continue;
+    total += RISK_WEIGHT[item.level];
+  }
+  return total;
 }
 
 function calculateSectorExposure(positions: SentinelPosition[]): Map<string, number> {
@@ -1044,6 +1088,7 @@ export function causalityEngine(args: {
     .map((signal) => signal.signalName)
     .join(" + ") || "常规观察"}"事件，需结合板块结构和模拟持仓影响继续观察。`;
 
+  // 用户自己写的交易计划是原话引用，不做合规改写
   const finalText = complianceEngine(
     [
       `【一句话总结】${oneLineSummary}`,
@@ -1057,6 +1102,7 @@ export function causalityEngine(args: {
       `【风险提示】${riskNotes.join("")}`,
       `【后续观察指标】${observationPoints.join("；")}`,
     ].join("\n\n"),
+    { preserve: position?.plan ? [position.plan] : [] },
   );
 
   return {
@@ -1157,7 +1203,7 @@ export function journalEngine(args: {
   );
 
   return {
-    date: args.date ?? new Date().toISOString().slice(0, 10),
+    date: args.date ?? shanghaiDate(),
     accountSummary,
     marketSummary,
     alertSummary,
@@ -1173,27 +1219,43 @@ export function journalEngine(args: {
 /**
  * 7. 合规过滤
  */
-export function complianceEngine(text: string): string {
+/**
+ * 只改写「荐股式」措辞，不改变句子的肯定/否定方向，也不改写事实。
+ * - 否定形式（不建议卖出、不保证收益）单独处理或跳过，避免「不建议卖出」被改成「不需要关注风险变化」这类语义反转；
+ * - 「清仓」「满仓」作为交易事实出现时保留，只改写「建议清仓」「建议满仓」这类建议；
+ * - `preserve` 里的原文（用户交易计划、成交记录等）整体跳过。
+ */
+export function complianceEngine(text: string, options: { preserve?: string[] } = {}): string {
   const replacements: Array<[RegExp, string]> = [
+    [/(?:不|别|勿)建议(?:买入|卖出|清仓|满仓)/g, "不作交易判断"],
     [/建议买入/g, "可以纳入观察"],
     [/建议卖出/g, "需要关注风险变化"],
-    [/满仓/g, "高仓位"],
-    [/清仓/g, "降低风险暴露"],
-    [/必涨/g, "存在上涨可能但需验证"],
-    [/必跌/g, "存在下行风险但需验证"],
-    [/稳赚/g, "收益不确定"],
-    [/保证收益/g, "不保证收益"],
+    [/建议满仓/g, "不宜据此调整仓位"],
+    [/建议清仓/g, "需要关注风险暴露"],
+    [/(?<![不非])必涨/g, "存在上涨可能但需验证"],
+    [/(?<![不非])必跌/g, "存在下行风险但需验证"],
+    [/(?<![不非])稳赚/g, "收益不确定"],
+    [/(?<![不无非])保证收益/g, "不保证收益"],
     [/内幕消息/g, "未经验证信息"],
-    [/确定上涨/g, "可能走强但需验证"],
-    [/确定下跌/g, "可能走弱但需验证"],
+    [/(?<![不非])确定上涨/g, "可能走强但需验证"],
+    [/(?<![不非])确定下跌/g, "可能走弱但需验证"],
     [/目标价承诺/g, "观察价位"],
   ];
 
+  // 先把需要原样保留的片段换成占位符，改写完再换回来
+  const preserved = (options.preserve ?? []).filter((segment) => segment.length > 0);
   let output = text;
+  preserved.forEach((segment, index) => {
+    output = output.split(segment).join(`\u0000${index}\u0000`);
+  });
 
   for (const [pattern, replacement] of replacements) {
     output = output.replace(pattern, replacement);
   }
+
+  preserved.forEach((segment, index) => {
+    output = output.split(`\u0000${index}\u0000`).join(segment);
+  });
 
   const riskDisclaimer = "本内容仅用于模拟实盘、市场观察和学习演示，不构成投资建议。";
 
@@ -1305,12 +1367,24 @@ export function runSentinelCore(input?: Partial<ReturnType<typeof generateSentin
   journal: JournalResult;
 } {
   const demo = generateSentinelDemoData();
-  const data = { ...demo, ...input };
+  // input 里值为 undefined 的键不能覆盖 demo，否则下游拿到 undefined 直接崩
+  const defined = Object.fromEntries(
+    Object.entries(input ?? {}).filter(([, value]) => value !== undefined),
+  ) as Partial<typeof demo>;
+  const data = { ...demo, ...defined };
   const marketRadar = marketRadarEngine({ indices: data.indices, stocks: data.stocks, sectors: data.sectors, account: data.account });
   const signals = signalEngine({ stocks: data.stocks, sectors: data.sectors, account: data.account, marketRadar });
   const alerts = alertEngine({ signals });
   const risk = riskEngine({ account: data.account, marketRadar, alerts });
-  const causalityReports = data.stocks.slice(0, 3).map((stock) => causalityEngine({ stock, account: data.account, marketRadar, sectors: data.sectors, signals, newsEvents: data.newsEvents }));
+  // 归因报告取提醒分最高的三只，而不是输入顺序的前三只
+  const alertScore = new Map<string, number>();
+  for (const alert of alerts) alertScore.set(alert.code, Math.max(alertScore.get(alert.code) ?? 0, alert.score));
+  const topStocks = data.stocks
+    .map((stock, index) => ({ stock, index, score: alertScore.get(stock.code) ?? -1 }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 3)
+    .map((entry) => entry.stock);
+  const causalityReports = topStocks.map((stock) => causalityEngine({ stock, account: data.account, marketRadar, sectors: data.sectors, signals, newsEvents: data.newsEvents }));
   const journal = journalEngine({ account: data.account, marketRadar, alerts, risk });
   return { marketRadar, signals, alerts, risk, causalityReports, journal };
 }

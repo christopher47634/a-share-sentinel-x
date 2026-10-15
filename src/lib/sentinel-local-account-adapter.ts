@@ -2,6 +2,7 @@
 // 复用现有 account-storage，不重复发明账本
 
 import type { Position, AccountSummary } from "@/types/account";
+import { getSectorById } from "@/mock/sectors";
 
 export interface LocalSentinelPosition {
   code: string;
@@ -13,6 +14,7 @@ export interface LocalSentinelPosition {
   unrealizedPnl?: number;
   unrealizedPnlPct?: number;
   sector?: string;
+  positionRatio?: number;
 }
 
 export interface LocalSentinelAccountSnapshot {
@@ -58,13 +60,20 @@ export function loadLocalSentinelAccountSnapshot(): LocalSentinelAccountSnapshot
     marketValue: typeof p.marketValue === "number" ? p.marketValue : p.quantity * (p.currentPrice ?? p.avgCost),
     unrealizedPnl: p.unrealizedPnL,
     unrealizedPnlPct: p.unrealizedPnLPercent,
-    sector: (p.sectorId) || undefined,
+    // 账本里存的是板块 slug（semiconductor），sentinel-core 按中文板块名（半导体）匹配
+    sector: (p.sectorId && (getSectorById(p.sectorId)?.name ?? p.sectorId)) || undefined,
   }));
+
+  const positionMarketValue = account?.marketValue ?? mapped.reduce((sum, p) => sum + (p.marketValue ?? 0), 0);
+  const totalAsset = account?.totalAssets ?? (account?.availableCash ?? 0) + positionMarketValue;
+  for (const p of mapped) {
+    p.positionRatio = totalAsset > 0 ? (p.marketValue ?? 0) / totalAsset : 0;
+  }
 
   return {
     cash: account?.availableCash,
     totalAsset: account?.totalAssets,
-    positionMarketValue: account?.marketValue ?? mapped.reduce((sum, p) => sum + (p.marketValue ?? 0), 0),
+    positionMarketValue,
     positions: mapped,
     updatedAt: new Date().toISOString(),
   };

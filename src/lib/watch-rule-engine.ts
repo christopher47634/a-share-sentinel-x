@@ -17,6 +17,11 @@ export interface TriggeredSignal {
 /**
  * 根据用户规则和当前行情评估触发信号
  */
+/** 旧存档里可能有 NaN 阈值（Number("abc")），这种规则项直接跳过 */
+function isThreshold(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 export function evaluateWatchRules(
   rules: WatchRule[],
   stocks: SentinelStock[],
@@ -35,7 +40,7 @@ export function evaluateWatchRules(
     const triggers: string[] = [];
 
     // 涨跌幅检查
-    if (rule.rules.priceChangePct !== undefined) {
+    if (isThreshold(rule.rules.priceChangePct)) {
       const threshold = rule.rules.priceChangePct;
       if (Math.abs(stock.changePct) >= threshold) {
         const direction = stock.changePct > 0 ? "上涨" : "下跌";
@@ -45,24 +50,24 @@ export function evaluateWatchRules(
     }
 
     // 量比检查
-    if (rule.rules.volumeRatio !== undefined && stock.volumeRatio !== undefined) {
+    if (isThreshold(rule.rules.volumeRatio) && stock.volumeRatio !== undefined) {
       if (stock.volumeRatio >= rule.rules.volumeRatio) {
         triggers.push(`量比超过用户设置阈值 ${rule.rules.volumeRatio}`);
         evidence.push(`当前量比 ${stock.volumeRatio.toFixed(2)}，阈值 ${rule.rules.volumeRatio}`);
       }
     }
 
-    // 回撤检查（需要 prevClose）
-    if (rule.rules.drawdownPct !== undefined && stock.prevClose !== undefined) {
-      const drawdown = ((stock.prevClose - stock.price) / stock.prevClose) * 100;
-      if (drawdown >= rule.rules.drawdownPct) {
-        triggers.push(`回撤超过用户设置阈值 ${rule.rules.drawdownPct}%`);
-        evidence.push(`当前回撤 ${drawdown.toFixed(2)}%，阈值 ${rule.rules.drawdownPct}%`);
+    // 较昨收跌幅（需要 prevClose）。这里只有昨收没有日内高点，算的不是「回撤」，文案如实写
+    if (isThreshold(rule.rules.drawdownPct) && stock.prevClose !== undefined && stock.prevClose > 0) {
+      const dropFromPrevClose = ((stock.prevClose - stock.price) / stock.prevClose) * 100;
+      if (dropFromPrevClose >= rule.rules.drawdownPct) {
+        triggers.push(`较昨收跌幅超过用户设置阈值 ${rule.rules.drawdownPct}%`);
+        evidence.push(`较昨收下跌 ${dropFromPrevClose.toFixed(2)}%，阈值 ${rule.rules.drawdownPct}%`);
       }
     }
 
     // 板块涨跌幅检查
-    if (rule.rules.sectorChangePct !== undefined && stock.sector && sectorMap.size > 0) {
+    if (isThreshold(rule.rules.sectorChangePct) && stock.sector && sectorMap.size > 0) {
       const sector = sectorMap.get(stock.sector);
       if (sector && Math.abs(sector.changePct) >= rule.rules.sectorChangePct) {
         triggers.push(`所属板块 ${stock.sector} 涨跌幅超过阈值 ${rule.rules.sectorChangePct}%`);
@@ -107,7 +112,7 @@ export function explainRuleTrigger(
     parts.push(`- 量比阈值：${rule.rules.volumeRatio}`);
   }
   if (rule.rules.drawdownPct !== undefined) {
-    parts.push(`- 回撤阈值：${rule.rules.drawdownPct}%`);
+    parts.push(`- 较昨收跌幅阈值：${rule.rules.drawdownPct}%`);
   }
 
   parts.push(`\n系统检测：`);
