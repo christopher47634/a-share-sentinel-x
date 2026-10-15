@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import DesktopShell from "@/components/layout/DesktopShell";
 import MetricCard from "@/components/common/MetricCard";
 import GlassCard from "@/components/common/GlassCard";
@@ -8,6 +8,7 @@ import SentinelPulse from "@/components/ai/SentinelPulse";
 import LiveIntelligenceFeed from "@/components/ai/LiveIntelligenceFeed";
 import AgentStatusStrip from "@/components/ai/AgentStatusStrip";
 import { getAgentStates } from "@/lib/agent-orchestrator";
+import { shanghaiDate } from "@/lib/time";
 import {
   runSentinelCore,
   generateSentinelDemoData,
@@ -16,6 +17,8 @@ import type { RiskLevel, AlertLevel } from "@/lib/sentinel-core";
 import type { IntelligenceEvent, SentinelDimension, AgentStatus } from "@/types/agent";
 import { motion } from "framer-motion";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
+import DemoDataBadge from "@/components/common/DemoDataBadge";
+import ClientTime from "@/components/common/ClientTime";
 
 function formatMoney(val: number): string {
   if (val >= 1e8) return (val / 1e8).toFixed(2) + " 亿";
@@ -67,8 +70,10 @@ export default function CommandCenterPage() {
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
 
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  // 「现在」只在浏览器挂载后取：页面是静态预渲染的，服务端算出的是构建时刻（且是 UTC），直接渲染会 hydration 不一致
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => setNow(new Date()), []);
+  const dateStr = now ? shanghaiDate(now) : "";
 
   // Stagger delay helper
   const staggerItem = (i: number) => ({
@@ -83,10 +88,10 @@ export default function CommandCenterPage() {
 
   // ─── Intelligence Feed from Core ───
   const feedEvents = useMemo((): IntelligenceEvent[] => {
-    const now = new Date();
     const ts = (offsetMin: number) => {
+      if (!now) return "--:--";
       const d = new Date(now.getTime() - offsetMin * 60_000);
-      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      return d.toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" });
     };
 
     return [
@@ -136,7 +141,7 @@ export default function CommandCenterPage() {
         level: "success",
       },
     ];
-  }, [marketRadar, signals, alerts, risk, causalityReports, riskHighCount]);
+  }, [now, marketRadar, signals, alerts, risk, causalityReports, riskHighCount]);
 
   // ─── Sentinel Pulse Dimensions ───
   const pulseDimensions = useMemo((): SentinelDimension[] => {
@@ -224,6 +229,7 @@ export default function CommandCenterPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               A-Share Sentinel X
+              <DemoDataBadge />
             </h1>
             <p className="text-sm text-[var(--text-muted)] mt-1">
               AI 原生模拟实盘指挥舱
@@ -335,7 +341,7 @@ export default function CommandCenterPage() {
               <div className="glass p-4 rounded-2xl">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-400/10 text-emerald-200 border border-emerald-400/30">Local Portfolio Synced</span>
-                  <span className="text-xs text-[var(--text-muted)]">更新于 {new Date(snapshot?.updatedAt || "").toLocaleTimeString("zh-CN")}</span>
+                  <span className="text-xs text-[var(--text-muted)]">更新于 <ClientTime value={snapshot?.updatedAt} seconds /></span>
                 </div>
                 <div className="grid grid-cols-3 gap-3 text-sm">
                   <div><span className="text-[var(--text-muted)]">持仓数</span> <span className="font-mono-nums text-[var(--text-primary)]">{snapshot?.positions.length}</span></div>
@@ -572,6 +578,9 @@ export default function CommandCenterPage() {
 
         {/* ── Agent Status Strip ── */}
         <motion.div {...staggerItem(8)}>
+          <p className="mb-2 text-[11px] text-[var(--text-muted)]">
+            Agent 状态为演示编排：状态和日志是内置样本，不代表后台真的在运行任务。
+          </p>
           <AgentStatusStrip agents={agentStates} />
         </motion.div>
 

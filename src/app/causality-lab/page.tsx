@@ -19,6 +19,7 @@ import {
   Activity,
 } from "lucide-react";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
+import DemoDataBadge from "@/components/common/DemoDataBadge";
 
 // ─── Evidence Chain step definition ───
 const EVIDENCE_STEPS = [
@@ -67,6 +68,7 @@ export default function CausalityLabPage() {
               <div>
                 <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
                   AI 归因解盘实验室
+                  <DemoDataBadge />
                 </h1>
                 <p className="text-xs text-[var(--text-muted)]">
                   Causality Lab — 分层归因 + 证据链

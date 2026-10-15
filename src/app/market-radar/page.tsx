@@ -11,6 +11,7 @@ import type {
   SentinelStock,
 } from "@/lib/sentinel-core";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
+import DemoDataBadge from "@/components/common/DemoDataBadge";
 
 // ─── helpers ───
 
@@ -247,6 +248,7 @@ export default function MarketRadarPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               Market Radar
+              <DemoDataBadge />
             </h1>
             <p className="text-sm text-[var(--text-muted)] mt-0.5">
               AI 自动看盘雷达

@@ -270,6 +270,11 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
 
     let chart: any = null;
     let resizeObserver: ResizeObserver | null = null;
+    // effect 清理后，挂起中的 initChart 不能再建图；容器宽度一直为 0 时最多重试约 5 秒
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 25;
     setLoaded(false);
     chartRef.current = null;
     priceSeriesRef.current = null;
@@ -278,14 +283,16 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
     const initChart = async () => {
       try {
         await new Promise((resolve) => setTimeout(resolve, 100));
+        if (cancelled) return;
 
         if (!containerRef.current || containerRef.current.clientWidth === 0) {
-          setTimeout(() => initChart(), 200);
+          attempts += 1;
+          if (attempts < MAX_ATTEMPTS) retryTimer = setTimeout(() => initChart(), 200);
           return;
         }
 
         const lc = await import("lightweight-charts");
-        if (!containerRef.current) return;
+        if (cancelled || !containerRef.current) return;
 
         containerRef.current.innerHTML = "";
 
@@ -342,7 +349,9 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
         }
 
         fillVisibleRange(chart, chartData);
-        setTimeout(() => setLoaded(true), 100);
+        setTimeout(() => {
+          if (!cancelled) setLoaded(true);
+        }, 100);
 
         resizeObserver = new ResizeObserver((entries) => {
           if (entries[0] && chart) {
@@ -375,6 +384,8 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
     initChart();
 
     return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       if (resizeObserver) resizeObserver.disconnect();
       if (chart) {
         chart.remove();

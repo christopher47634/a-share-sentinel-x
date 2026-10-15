@@ -2,13 +2,15 @@
 
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { runSentinelCore, generateSentinelDemoData } from "@/lib/sentinel-core";
-import { type WatchRule, loadRules, addRule, removeRule, toggleRule } from "@/lib/watch-rule-storage";
+import { type WatchRule, loadRules, addRule, removeRule, toggleRule, parseThreshold } from "@/lib/watch-rule-storage";
 import { evaluateWatchRules, explainRuleTrigger } from "@/lib/watch-rule-engine";
 import DesktopShell from "@/components/layout/DesktopShell";
 import GlassCard from "@/components/common/GlassCard";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AlertLevel, SignalType, Alert, Signal } from "@/lib/sentinel-core";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
+import DemoDataBadge from "@/components/common/DemoDataBadge";
+import ClientTime from "@/components/common/ClientTime";
 
 // ─── helpers ───
 
@@ -143,10 +145,7 @@ function AlertCard({ alert, heldCodes }: { alert: Alert; heldCodes?: string[] })
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold bg-cyan-400/10 text-cyan-300 border border-cyan-400/30">本地持仓</span>
           )}
           <span className="ml-auto text-[9px] font-mono text-[var(--text-muted)]">
-            {new Date(alert.createdAt).toLocaleTimeString("zh-CN", {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            <ClientTime value={alert.createdAt} />
           </span>
         </div>
 
@@ -372,8 +371,8 @@ export default function WatchTowerPage() {
       symbol: newSymbol,
       name: newName,
       rules: {
-        priceChangePct: newPricePct ? Number(newPricePct) : undefined,
-        volumeRatio: newVolumeRatio ? Number(newVolumeRatio) : undefined,
+        priceChangePct: parseThreshold(newPricePct),
+        volumeRatio: parseThreshold(newVolumeRatio),
       },
       enabled: true,
     });
@@ -391,8 +390,6 @@ export default function WatchTowerPage() {
     setRules(updated);
   }, []);
 
-  const now = new Date();
-  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
   // Stats
   const highCount = alerts.filter((a) => a.level === "High").length;
@@ -427,6 +424,7 @@ export default function WatchTowerPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               Watch Tower
+              <DemoDataBadge />
             </h1>
             <p className="text-sm text-[var(--text-muted)] mt-0.5">
               AI 自动盯盘塔
@@ -434,7 +432,7 @@ export default function WatchTowerPage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono text-[var(--text-secondary)]">
-              {timeStr}
+              <ClientTime />
             </span>
             <span
               className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider"
@@ -717,7 +715,7 @@ export default function WatchTowerPage() {
                 <div><div className="text-[10px] text-[var(--text-muted)]">持仓数</div><div className="font-mono-nums text-sm text-[var(--text-primary)]">{snapshot?.positions.length}</div></div>
                 <div><div className="text-[10px] text-[var(--text-muted)]">持仓代码</div><div className="font-mono text-xs text-[var(--text-primary)]">{heldCodes.join(", ")}</div></div>
                 <div><div className="text-[10px] text-[var(--text-muted)]">持仓相关提醒</div><div className="font-mono-nums text-sm text-[var(--ai-cyan)]">{alerts.filter(a => heldCodes.includes(a.code)).length}</div></div>
-                <div><div className="text-[10px] text-[var(--text-muted)]">更新时间</div><div className="text-xs text-[var(--text-muted)]">{new Date(snapshot?.updatedAt || "").toLocaleTimeString("zh-CN")}</div></div>
+                <div><div className="text-[10px] text-[var(--text-muted)]">更新时间</div><div className="text-xs text-[var(--text-muted)]"><ClientTime value={snapshot?.updatedAt} seconds /></div></div>
               </div>
               <p className="text-[10px] text-[var(--text-muted)]">买入新股票后，这里会参与本地持仓盯盘。</p>
             </>

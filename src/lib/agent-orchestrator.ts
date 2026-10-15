@@ -16,10 +16,10 @@ export function getAgentStates(): AgentState[] {
       lastRunAt: iso(0.5),
       durationMs: 2450,
       inputSummary: "拉取沪深市场快照（eastmoney）",
-      outputSummary: "沪深行情数据已同步，3984 只标的更新完成",
+      outputSummary: "演示样本已载入：5 只标的、6 个板块（非实时行情）",
       recentLogs: [
         "[09:30:01] 数据同步启动 → eastmoney 源",
-        "[09:30:02] 沪深行情数据已同步，3984 只标的更新完成",
+        "[09:30:02] 演示样本已载入：5 只标的、6 个板块（非实时行情）",
       ],
     },
     {
@@ -158,7 +158,7 @@ export function getIntelligenceFeed(): IntelligenceEvent[] {
       id: "1",
       timestamp: "09:30",
       agent: "data",
-      message: "沪深行情数据已同步，3984 只标的更新完成",
+      message: "演示样本已载入：5 只标的、6 个板块（非实时行情）",
       level: "success",
     },
     {

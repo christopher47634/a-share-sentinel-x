@@ -5,6 +5,8 @@
 //   trend="down":    bias = -0.58  (avg daily drift ≈ -0.08×vol)
 //   trend="sideways": bias = -0.50 (avg daily drift ≈ 0)
 
+import { seededRandom } from "@/lib/seeded-random";
+
 export interface KlineBar {
   time: number; // unix timestamp in seconds
   open: number;
@@ -12,6 +14,13 @@ export interface KlineBar {
   low: number;
   close: number;
   volume: number;
+}
+
+/** 按北京时间当天 0 点对齐，同一天里构建和浏览器算出的时间轴一致 */
+function shanghaiDayStart(): number {
+  const offset = 8 * 3600;
+  const nowSec = Math.floor(Date.now() / 1000);
+  return nowSec - ((nowSec + offset) % 86400);
 }
 
 /**
@@ -27,24 +36,25 @@ function generateKlineData(
   volatility: number = 0.02,
   trend: "up" | "down" | "sideways" = "up"
 ): KlineBar[] {
-  // Bias lookup: Math.random() returns [0,1), so subtracting these
+  // Bias lookup: random() returns [0,1), so subtracting these
   // gives the desired directional drift.
   const biasMap = { up: 0.42, down: 0.58, sideways: 0.50 };
   const bias = biasMap[trend];
+  const random = seededRandom(`${basePrice}|${days}|${volatility}|${trend}`);
 
   const data: KlineBar[] = [];
   let price = basePrice;
-  const now = Math.floor(Date.now() / 1000);
+  const now = shanghaiDayStart();
   const daySeconds = 86400;
 
   for (let i = days; i >= 0; i--) {
     const time = now - i * daySeconds;
-    const change = (Math.random() - bias) * volatility * price;
+    const change = (random() - bias) * volatility * price;
     const open = price;
     const close = price + change;
-    const high = Math.max(open, close) + Math.random() * volatility * price * 0.5;
-    const low = Math.min(open, close) - Math.random() * volatility * price * 0.5;
-    const volume = Math.floor(Math.random() * 5000000 + 1000000);
+    const high = Math.max(open, close) + random() * volatility * price * 0.5;
+    const low = Math.min(open, close) - random() * volatility * price * 0.5;
+    const volume = Math.floor(random() * 5000000 + 1000000);
 
     data.push({
       time,
@@ -182,12 +192,13 @@ export function getSectorTrend(sectorId: string, days: number = 60): TrendPoint[
 
   const data: TrendPoint[] = [];
   let value = 1000;
-  const now = Math.floor(Date.now() / 1000);
+  const now = shanghaiDayStart();
   const daySeconds = 86400;
+  const random = seededRandom(`sector|${sectorId}|${days}`);
 
   for (let i = days; i >= 0; i--) {
     const time = now - i * daySeconds;
-    value += (Math.random() - bias) * 20;
+    value += (random() - bias) * 20;
     value = Math.max(800, Math.min(1200, value));
     data.push({ time, value: parseFloat(value.toFixed(2)) });
   }

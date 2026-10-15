@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { seededRandom } from "@/lib/seeded-random";
 
 interface OrderLevel {
   price: number;
@@ -19,11 +20,13 @@ function generateOrderBook(currentPrice: number, prevClose: number) {
   const bids: OrderLevel[] = [];
   const isUp = currentPrice >= prevClose;
   const step = currentPrice * 0.001;
+  // 演示盘口：同一价格得到同一组挂单量，服务端预渲染和浏览器水合一致
+  const random = seededRandom(`orderbook|${currentPrice}|${prevClose}`);
 
   for (let i = 5; i >= 1; i--) {
     asks.push({
       price: parseFloat((currentPrice + step * i).toFixed(2)),
-      volume: Math.floor(Math.random() * 500 + 50) * 100,
+      volume: Math.floor(random() * 500 + 50) * 100,
       label: `卖${6 - i}`,
     });
   }
@@ -31,7 +34,7 @@ function generateOrderBook(currentPrice: number, prevClose: number) {
   for (let i = 1; i <= 5; i++) {
     bids.push({
       price: parseFloat((currentPrice - step * i).toFixed(2)),
-      volume: Math.floor(Math.random() * 500 + 50) * 100,
+      volume: Math.floor(random() * 500 + 50) * 100,
       label: `买${i}`,
     });
   }
