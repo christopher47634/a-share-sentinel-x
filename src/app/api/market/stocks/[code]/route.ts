@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getMarketStockDetail } from "@/lib/market-provider";
+import { getMarketStockDetail, normalizeCode } from "@/lib/market-provider";
 import type { MarketTimeframe } from "@/types/market";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +10,9 @@ export async function GET(
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params;
+  if (!normalizeCode(code)) {
+    return NextResponse.json({ error: "invalid_code" }, { status: 400 });
+  }
   const timeframeParam = request.nextUrl.searchParams.get("timeframe") as MarketTimeframe | null;
   const timeframe =
     timeframeParam && VALID_TIMEFRAMES.includes(timeframeParam) ? timeframeParam : "day";

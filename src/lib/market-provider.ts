@@ -39,9 +39,49 @@ const QUOTE_FIELDS = [
   "f169",
   "f170",
   "f9",
+  "f59",
 ].join(",");
 
 export const DEFAULT_INDEX_CODES = ["000001", "399001", "399006", "000688", "899050"];
+
+/** 一次快照最多查询的代码数 */
+export const MAX_SNAPSHOT_CODES = 40;
+
+export type MarketExchange = "sh" | "sz" | "bj";
+export type SecurityKind = "stock" | "index";
+
+export interface NormalizedCode {
+  market: MarketExchange;
+  code: string;
+}
+
+/**
+ * 校验并规范化外部传入的代码：只接受 6 位数字，可带 sh/sz/bj 前缀。
+ * 其它输入（例如 `600519&fields=...`）一律返回 null，绝不进入 URL 或正则。
+ */
+export function normalizeCode(raw: string): NormalizedCode | null {
+  const match = /^(sh|sz|bj)?(\d{6})$/i.exec(raw.trim());
+  if (!match) return null;
+  const code = match[2];
+  const explicit = match[1]?.toLowerCase() as MarketExchange | undefined;
+  return { market: explicit ?? inferStockMarket(code), code };
+}
+
+/** 个股按代码段推断交易所：北交所 92/8/4 开头，沪市 5/6/9 开头（含 900 B 股），其余深市 */
+function inferStockMarket(code: string): MarketExchange {
+  if (/^(92|8|4)/.test(code)) return "bj";
+  if (/^(5|6|9)/.test(code)) return "sh";
+  return "sz";
+}
+
+/** ETF/LOF 等场内基金价格是 3 位小数 */
+function priceDecimalsFor(code: string): number {
+  return /^(5|15|16|18)/.test(code) ? 3 : 2;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const INDEX_SECIDS: Record<string, string> = {
   "000001": "1.000001",
@@ -63,21 +103,28 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function secidFor(code: string): string {
-  const normalized = code.trim();
-  const indexSecid = INDEX_SECIDS[normalized];
-  if (indexSecid) return indexSecid;
-  if (/^(5|6|9)/.test(normalized)) return `1.${normalized}`;
-  return `0.${normalized}`;
+/**
+ * 指数和个股分开查表：000001 作为个股是平安银行（深市），作为指数是上证指数；
+ * 000688 作为个股是国城矿业，作为指数是科创50。不合法的代码返回 null。
+ */
+export function secidFor(code: string, kind: SecurityKind = "stock"): string | null {
+  const normalized = normalizeCode(code);
+  if (!normalized) return null;
+  if (kind === "index") {
+    const indexSecid = INDEX_SECIDS[normalized.code];
+    if (indexSecid) return indexSecid;
+  }
+  return `${normalized.market === "sh" ? 1 : 0}.${normalized.code}`;
 }
 
-function tencentSymbolFor(code: string): string {
-  const normalized = code.trim();
-  const indexSymbol = TENCENT_INDEX_SYMBOLS[normalized];
-  if (indexSymbol) return indexSymbol;
-  if (/^8/.test(normalized)) return `bj${normalized}`;
-  if (/^(5|6|9)/.test(normalized)) return `sh${normalized}`;
-  return `sz${normalized}`;
+export function tencentSymbolFor(code: string, kind: SecurityKind = "stock"): string | null {
+  const normalized = normalizeCode(code);
+  if (!normalized) return null;
+  if (kind === "index") {
+    const indexSymbol = TENCENT_INDEX_SYMBOLS[normalized.code];
+    if (indexSymbol) return indexSymbol;
+  }
+  return `${normalized.market}${normalized.code}`;
 }
 
 function normalizeScaled(value: unknown, scale = 100): number | null {
@@ -127,6 +174,19 @@ function formatDateYYYYMMDD(date: Date): string {
   return `${year}${month}${day}`;
 }
 
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** 把时间戳平移到上海时区后用 UTC getter 读取，结果与服务器时区无关 */
+function shanghaiParts(epochSeconds: number): { year: number; month: number; day: number; weekday: number } {
+  const shifted = new Date(epochSeconds * 1000 + SHANGHAI_OFFSET_MS);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    weekday: shifted.getUTCDay(),
+  };
+}
+
 function beginDateFor(timeframe: MarketTimeframe): string {
   const begin = new Date();
   if (timeframe === "minute") {
@@ -139,7 +199,9 @@ function beginDateFor(timeframe: MarketTimeframe): string {
 }
 
 function mockQuote(code: string): MarketQuote | null {
-  const stock = getStockByCode(code);
+  const normalized = normalizeCode(code);
+  if (!normalized) return null;
+  const stock = getStockByCode(normalized.code);
   if (!stock) return null;
   return {
     ...stock,
@@ -176,8 +238,8 @@ function mockIndexQuote(code: string): MarketQuote | null {
   };
 }
 
-function fallbackQuoteFor(code: string): MarketQuote | null {
-  return mockQuote(code) ?? mockIndexQuote(code);
+function fallbackQuoteFor(code: string, kind: SecurityKind): MarketQuote | null {
+  return kind === "index" ? mockIndexQuote(code) : mockQuote(code);
 }
 
 function mockCandles(code: string): MarketCandle[] {
@@ -185,15 +247,14 @@ function mockCandles(code: string): MarketCandle[] {
 }
 
 function bucketKeyFor(candle: MarketCandle, timeframe: MarketTimeframe): string {
-  const date = new Date(candle.time * 1000);
+  const { year, month, day, weekday } = shanghaiParts(candle.time);
   if (timeframe === "month") {
-    return `${date.getFullYear()}-${date.getMonth() + 1}`;
+    return `${year}-${month}`;
   }
 
-  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const day = monday.getDay() || 7;
-  monday.setDate(monday.getDate() - day + 1);
-  return formatDateYYYYMMDD(monday);
+  // 该交易日所在周的周一（上海日期）
+  const mondayUtc = Date.UTC(year, month - 1, day) - ((weekday || 7) - 1) * 86_400_000;
+  return new Date(mondayUtc).toISOString().slice(0, 10);
 }
 
 function aggregateCandles(candles: MarketCandle[], timeframe: MarketTimeframe): MarketCandle[] {
@@ -222,25 +283,28 @@ function fallbackCandles(code: string, timeframe: MarketTimeframe): MarketCandle
   return aggregateCandles(mockCandles(code), timeframe);
 }
 
-async function fetchWithTimeout(
+/** 超时覆盖整个请求，包括读取响应正文（以前拿到响应头就清掉了定时器） */
+async function fetchWithTimeout<T>(
   url: string,
   init: RequestInit & { next?: { revalidate: number } },
-  timeoutMs: number
-): Promise<Response> {
+  timeoutMs: number,
+  read: (response: Response) => Promise<T>
+): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal,
     });
+    return await read(response);
   } finally {
     clearTimeout(timeout);
   }
 }
 
 async function fetchJson<T>(url: string, revalidateSeconds = 30): Promise<T> {
-  const response = await fetchWithTimeout(
+  return fetchWithTimeout(
     url,
     {
       headers: {
@@ -249,16 +313,18 @@ async function fetchJson<T>(url: string, revalidateSeconds = 30): Promise<T> {
       },
       next: { revalidate: revalidateSeconds },
     },
-    EASTMONEY_TIMEOUT_MS
+    EASTMONEY_TIMEOUT_MS,
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`Eastmoney request failed: ${response.status}`);
+      }
+      return (await response.json()) as T;
+    }
   );
-  if (!response.ok) {
-    throw new Error(`Eastmoney request failed: ${response.status}`);
-  }
-  return (await response.json()) as T;
 }
 
 async function fetchTencentText(url: string, revalidateSeconds = 15): Promise<string> {
-  const response = await fetchWithTimeout(
+  const buffer = await fetchWithTimeout(
     url,
     {
       headers: {
@@ -267,13 +333,14 @@ async function fetchTencentText(url: string, revalidateSeconds = 15): Promise<st
       },
       next: { revalidate: revalidateSeconds },
     },
-    TENCENT_TIMEOUT_MS
+    TENCENT_TIMEOUT_MS,
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`Tencent request failed: ${response.status}`);
+      }
+      return response.arrayBuffer();
+    }
   );
-  if (!response.ok) {
-    throw new Error(`Tencent request failed: ${response.status}`);
-  }
-
-  const buffer = await response.arrayBuffer();
   try {
     return new TextDecoder("gbk").decode(buffer);
   } catch {
@@ -286,23 +353,31 @@ interface EastmoneyQuoteResponse {
   data?: Record<string, unknown>;
 }
 
-async function fetchEastmoneyQuote(code: string): Promise<MarketQuote | null> {
-  const secid = secidFor(code);
+async function fetchEastmoneyQuote(code: string, kind: SecurityKind): Promise<MarketQuote | null> {
+  const secid = secidFor(code, kind);
+  if (!secid) return null;
   const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=${QUOTE_FIELDS}`;
   const json = await fetchJson<EastmoneyQuoteResponse>(url);
   const data = json.data;
   if (!data || json.rc !== 0) return null;
 
-  const fallback = fallbackQuoteFor(code);
-  const price = normalizeScaled(data.f43) ?? fallback?.price;
-  const prevClose = normalizeScaled(data.f60) ?? fallback?.prevClose;
+  const fallback = fallbackQuoteFor(code, kind);
+  // f59 是价格小数位数（ETF 为 3），缺失时按代码段推断；以前一律 /100，ETF 价格会放大 10 倍
+  const decimals = normalizeNumber(data.f59) ?? (kind === "index" ? 2 : priceDecimalsFor(code));
+  const priceScale = 10 ** decimals;
+  const livePrice = normalizeScaled(data.f43, priceScale);
+  const livePrevClose = normalizeScaled(data.f60, priceScale);
+  // 停牌、盘前等字段缺失时用 mock 补位，这时整条行情必须标成 mock，不能当成东财实时数据
+  const usedFallback = livePrice === null || livePrevClose === null;
+  const price = livePrice ?? fallback?.price;
+  const prevClose = livePrevClose ?? fallback?.prevClose;
   if (!price || !prevClose) return null;
 
   const name = String(data.f58 ?? fallback?.name ?? code);
-  const high = normalizeScaled(data.f44) ?? fallback?.high ?? price;
-  const low = normalizeScaled(data.f45) ?? fallback?.low ?? price;
-  const open = normalizeScaled(data.f46) ?? fallback?.open ?? price;
-  const changeAmount = normalizeScaled(data.f169) ?? price - prevClose;
+  const high = normalizeScaled(data.f44, priceScale) ?? fallback?.high ?? price;
+  const low = normalizeScaled(data.f45, priceScale) ?? fallback?.low ?? price;
+  const open = normalizeScaled(data.f46, priceScale) ?? fallback?.open ?? price;
+  const changeAmount = normalizeScaled(data.f169, priceScale) ?? price - prevClose;
   const changePercent = normalizeScaled(data.f170) ?? ((price - prevClose) / prevClose) * 100;
   const turnoverRate = normalizeScaled(data.f168) ?? fallback?.turnoverRate ?? 0;
   const pe = normalizeScaled(data.f9) ?? fallback?.pe ?? 0;
@@ -325,10 +400,10 @@ async function fetchEastmoneyQuote(code: string): Promise<MarketQuote | null> {
     low,
     open,
     prevClose,
-    source: "eastmoney",
-    sourceLabel: SOURCE_LABELS.eastmoney,
+    source: usedFallback ? "mock" : "eastmoney",
+    sourceLabel: usedFallback ? SOURCE_LABELS.mock : SOURCE_LABELS.eastmoney,
     updatedAt: nowIso(),
-    tradeStatus: "trading",
+    tradeStatus: usedFallback ? "unknown" : "trading",
   };
 }
 
@@ -346,17 +421,21 @@ function parseTencentAmountCny(parts: string[]): number | null {
   return amountWan === null ? null : amountWan * 10_000;
 }
 
-async function fetchTencentQuote(code: string): Promise<MarketQuote | null> {
-  const symbol = tencentSymbolFor(code);
+async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<MarketQuote | null> {
+  const symbol = tencentSymbolFor(code, kind);
+  if (!symbol) return null;
   const url = `https://qt.gtimg.cn/q=${symbol}`;
   const text = await fetchTencentText(url);
-  const match = text.match(new RegExp(`v_${symbol}="([^"]+)"`));
+  const match = text.match(new RegExp(`v_${escapeRegExp(symbol)}="([^"]+)"`));
   if (!match) return null;
 
   const parts = match[1].split("~");
-  const fallback = fallbackQuoteFor(code);
-  const price = parseNumber(parts[3]) ?? fallback?.price;
-  const prevClose = parseNumber(parts[4]) ?? fallback?.prevClose;
+  const fallback = fallbackQuoteFor(code, kind);
+  const livePrice = parseNumber(parts[3]) || null;
+  const livePrevClose = parseNumber(parts[4]) || null;
+  const usedFallback = livePrice === null || livePrevClose === null;
+  const price = livePrice ?? fallback?.price;
+  const prevClose = livePrevClose ?? fallback?.prevClose;
   if (!price || !prevClose) return null;
 
   const open = parseNumber(parts[5]) ?? fallback?.open ?? price;
@@ -385,23 +464,24 @@ async function fetchTencentQuote(code: string): Promise<MarketQuote | null> {
     low,
     open,
     prevClose,
-    source: "tencent",
-    sourceLabel: SOURCE_LABELS.tencent,
+    source: usedFallback ? "mock" : "tencent",
+    sourceLabel: usedFallback ? SOURCE_LABELS.mock : SOURCE_LABELS.tencent,
     updatedAt: parseTencentTradeTime(parts[30]),
-    tradeStatus: "trading",
+    tradeStatus: usedFallback ? "unknown" : "trading",
   };
 }
 
-export async function fetchLiveQuote(code: string): Promise<MarketQuote | null> {
+export async function fetchLiveQuote(code: string, kind: SecurityKind = "stock"): Promise<MarketQuote | null> {
+  if (!normalizeCode(code)) return null;
   try {
-    const quote = await fetchEastmoneyQuote(code);
+    const quote = await fetchEastmoneyQuote(code, kind);
     if (quote) return quote;
   } catch {
     // Try the secondary source below. The local WSL network often cuts Eastmoney HTTPS.
   }
 
   try {
-    return await fetchTencentQuote(code);
+    return await fetchTencentQuote(code, kind);
   } catch {
     return null;
   }
@@ -440,21 +520,23 @@ function maxCandleCountFor(timeframe: MarketTimeframe): number {
   }
 }
 
+/** 实时 K 线少于这个数才回退到 mock；以前日线要 360 根，新股永远只能看到假数据 */
 function minLiveCandlesFor(timeframe: MarketTimeframe): number {
   switch (timeframe) {
     case "minute":
-      return 20;
+      return 5;
     case "week":
-      return 80;
+      return 2;
     case "month":
-      return 24;
+      return 1;
     default:
-      return 360;
+      return 5;
   }
 }
 
 export async function fetchLiveCandles(code: string, timeframe: MarketTimeframe = "day"): Promise<MarketCandle[]> {
   const secid = secidFor(code);
+  if (!secid) return [];
   const klt = kltFor(timeframe);
   const end = "20500101";
   const begin = beginDateFor(timeframe);
@@ -491,8 +573,10 @@ export async function getMarketStockDetail(
   code: string,
   timeframe: MarketTimeframe = "day"
 ): Promise<MarketStockDetail | null> {
+  const normalized = normalizeCode(code);
+  if (!normalized) return null;
+  code = normalized.code;
   const fallbackQuote = mockQuote(code);
-  if (!fallbackQuote) return null;
 
   try {
     const [quoteResult, candlesResult] = await Promise.allSettled([
@@ -502,6 +586,17 @@ export async function getMarketStockDetail(
     const quote = quoteResult.status === "fulfilled" ? quoteResult.value : null;
     const candles = candlesResult.status === "fulfilled" ? candlesResult.value : [];
     const minLiveCandles = minLiveCandlesFor(timeframe);
+    // 不在 mock 股票池里的代码没有假数据可回退，只能用真实数据
+    if (!fallbackQuote) {
+      if (!quote) return null;
+      return {
+        quote,
+        candles,
+        analysis: buildMarketAnalysis(candles),
+        timeframe,
+        fallbackUsed: candles.length < minLiveCandles,
+      };
+    }
     const liveCandles = candles.length >= minLiveCandles ? candles : fallbackCandles(code, timeframe);
     return {
       quote: quote ?? fallbackQuote,
@@ -511,6 +606,7 @@ export async function getMarketStockDetail(
       fallbackUsed: !quote || candles.length < minLiveCandles,
     };
   } catch {
+    if (!fallbackQuote) return null;
     const candles = fallbackCandles(code, timeframe);
     return {
       quote: fallbackQuote,
@@ -529,7 +625,8 @@ function snapshotSourceFor(quotes: MarketQuote[]): MarketDataSource {
 }
 
 export async function getMarketSnapshot(codes?: string[]): Promise<MarketSnapshot> {
-  const selectedCodes = (codes?.length ? codes : stocks.slice(0, 24).map((item) => item.code)).slice(0, 40);
+  const valid = (codes ?? []).map((code) => normalizeCode(code)?.code).filter((code): code is string => Boolean(code));
+  const selectedCodes = (valid.length ? valid : stocks.slice(0, 24).map((item) => item.code)).slice(0, MAX_SNAPSHOT_CODES);
   const settled = await Promise.allSettled(selectedCodes.map((code) => fetchLiveQuote(code)));
   const quotes = settled
     .map((result, index) => {
@@ -555,11 +652,16 @@ function parseTurnoverYi(value: string): number {
   return num;
 }
 
+/** 两市总成交额只取上证指数 + 深证成指：创业板指属于深成指、科创50属于上证，加进来会重复计算 */
+const TURNOVER_INDEX_CODES = new Set(["000001", "399001"]);
+
 function buildBreadthFromQuotes(quotes: MarketQuote[]): MarketBreadth {
   const upCount = quotes.filter((item) => item.changePercent > 0).length;
   const downCount = quotes.filter((item) => item.changePercent < 0).length;
   const flatCount = quotes.length - upCount - downCount;
-  const turnoverYi = quotes.reduce((sum, item) => sum + parseTurnoverYi(item.turnover), 0);
+  const turnoverYi = quotes
+    .filter((item) => TURNOVER_INDEX_CODES.has(item.code))
+    .reduce((sum, item) => sum + parseTurnoverYi(item.turnover), 0);
   return {
     upCount,
     downCount,
@@ -570,7 +672,7 @@ function buildBreadthFromQuotes(quotes: MarketQuote[]): MarketBreadth {
 }
 
 export async function getMarketIndexSnapshot(): Promise<MarketIndexSnapshot> {
-  const settled = await Promise.allSettled(DEFAULT_INDEX_CODES.map((code) => fetchLiveQuote(code)));
+  const settled = await Promise.allSettled(DEFAULT_INDEX_CODES.map((code) => fetchLiveQuote(code, "index")));
   const indices = settled
     .map((result, index) => {
       if (result.status === "fulfilled" && result.value) return result.value;
