@@ -17,6 +17,16 @@ function isClient() {
   return typeof window !== "undefined";
 }
 
+/**
+ * 服务端文件账本只在本机自用时开启（服务端 ENABLE_SERVER_LEDGER=1 + LEDGER_TOKEN）。
+ * 没配置令牌时直接走浏览器模式，不去请求一个必然被拒绝的接口。
+ */
+const LEDGER_TOKEN = process.env.NEXT_PUBLIC_LEDGER_TOKEN ?? "";
+
+function ledgerHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { ...extra, "x-ledger-token": LEDGER_TOKEN };
+}
+
 function sortTransactions(
   transactions: LocalLedgerSnapshot["transactions"]
 ): LocalLedgerSnapshot["transactions"] {
@@ -59,10 +69,13 @@ export async function syncLocalLedgerSnapshot(
   }
 
   const snapshot = buildLocalLedgerSnapshot(reason);
+  if (!LEDGER_TOKEN) {
+    return { ok: true, mode: "browser", snapshot, updatedAt: snapshot.exportedAt };
+  }
   try {
     const response = await fetch("/api/account/ledger", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: ledgerHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ snapshot }),
     });
     const data = (await response.json()) as LocalLedgerSyncResult;
@@ -83,8 +96,11 @@ export async function fetchLocalLedgerSnapshot(): Promise<LocalLedgerSyncResult>
     return { ok: false, mode: "browser", error: "Client storage unavailable" };
   }
 
+  if (!LEDGER_TOKEN) {
+    return { ok: false, mode: "browser", error: "服务端账本未启用，账本只保存在本浏览器" };
+  }
   try {
-    const response = await fetch("/api/account/ledger", { cache: "no-store" });
+    const response = await fetch("/api/account/ledger", { cache: "no-store", headers: ledgerHeaders() });
     const data = (await response.json()) as LocalLedgerSyncResult;
     return response.ok ? data : { ...data, ok: false };
   } catch (error) {
