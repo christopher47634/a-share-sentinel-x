@@ -14,7 +14,9 @@ export interface Position {
   stockName: string
   sectorId: string
   quantity: number
-  availableQuantity: number
+  availableQuantity: number  // T+1: quantity - todayBought（派生，读取时按上海日期重算）
+  todayBought?: number       // lastBuyDate 当日买入、尚不可卖的数量
+  lastBuyDate?: string       // 最近一次买入的上海日期 YYYY-MM-DD
   avgCost: number
   openPrice: number          // 今日开盘价
   currentPrice: number

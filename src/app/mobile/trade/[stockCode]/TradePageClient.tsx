@@ -123,12 +123,14 @@ export default function TradePageClient() {
             sectorId: displayStock.sectorId,
             price: priceNum,
             quantity,
+            prevClose: displayStock.prevClose,
           })
         : executeSell({
             stockCode: displayStock.code,
             stockName: displayStock.name,
             price: priceNum,
             quantity,
+            prevClose: displayStock.prevClose,
           });
 
     if (!result.success) {
@@ -287,7 +289,7 @@ export default function TradePageClient() {
                     <button
                       onClick={() => {
                         setPriceEdited(true);
-                        setPrice((parseFloat(price) - 0.01).toFixed(2));
+                        setPrice(Math.max(0.01, (parseFloat(price) || 0) - 0.01).toFixed(2));
                       }}
                       className="w-11 h-11 rounded-xl flex items-center justify-center bg-[var(--surface-2)] text-[var(--text-secondary)] active:bg-[var(--surface-3)]"
                     >

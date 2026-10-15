@@ -73,12 +73,14 @@ export default function TradePanel({
           sectorId: stock.sectorId,
           price: priceNum,
           quantity,
+          prevClose: stock.prevClose,
         })
       : executeSell({
           stockCode: stock.code,
           stockName: stock.name,
           price: priceNum,
           quantity,
+          prevClose: stock.prevClose,
         });
 
     if (!result.success) {
@@ -276,7 +278,7 @@ export default function TradePanel({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() =>
-                        setPrice((parseFloat(price) - 0.01).toFixed(2))
+                        setPrice(Math.max(0.01, (parseFloat(price) || 0) - 0.01).toFixed(2))
                       }
                       className="w-10 h-10 rounded-lg flex items-center justify-center bg-[var(--surface-2)] text-[var(--text-secondary)] hover:bg-[var(--surface-3)] transition-colors"
                     >

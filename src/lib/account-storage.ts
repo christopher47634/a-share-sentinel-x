@@ -4,6 +4,9 @@ import { defaultAccount, getAccountSummary } from '@/mock/account';
 import { mockPositions } from '@/mock/positions';
 import { mockTransactions } from '@/mock/accountTransactions';
 import { mockPortfolioHistory } from '@/mock/portfolioHistory';
+import { shanghaiDate } from './time';
+
+export { shanghaiDate };
 
 // ─── Storage Keys ──────────────────────────────────────────────────
 const STORAGE_KEY = 'nexus-trade-account';
@@ -27,31 +30,82 @@ function getJson<T>(key: string, fallback: T): T {
   }
 }
 
-function setJson<T>(key: string, value: T): void {
-  if (!isClient()) return;
+/** Returns false when persistence failed (quota exceeded, storage unavailable, SSR). */
+function setJson<T>(key: string, value: T): boolean {
+  if (!isClient()) return false;
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    // localStorage full or unavailable — silently fail
+    return false;
   }
 }
 
-// ─── Account ───────────────────────────────────────────────────────
-export function getAccount(): AccountSummary {
-  return getJson<AccountSummary>(STORAGE_KEY, defaultAccount);
+/**
+ * Write several keys together: if any write fails, previously written keys are
+ * restored to their old raw values. Returns true only if every write succeeded.
+ */
+export function commitBatch(entries: Array<[string, unknown]>): boolean {
+  if (!isClient()) return false;
+  const previous = entries.map(([key]) => [key, window.localStorage.getItem(key)] as const);
+  try {
+    for (const [key, value] of entries) {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    }
+    return true;
+  } catch {
+    for (const [key, raw] of previous) {
+      try {
+        if (raw === null) window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, raw);
+      } catch {
+        // best effort rollback
+      }
+    }
+    return false;
+  }
 }
 
-export function saveAccount(account: AccountSummary): void {
-  setJson(STORAGE_KEY, account);
+export const STORAGE_KEYS = {
+  account: STORAGE_KEY,
+  positions: POSITIONS_KEY,
+  transactions: TRANSACTIONS_KEY,
+  history: HISTORY_KEY,
+} as const;
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+// ─── Account ───────────────────────────────────────────────────────
+/** Always returns a fresh deep copy; the shared default object is never handed out. */
+export function getAccount(): AccountSummary {
+  return clone(getJson<AccountSummary>(STORAGE_KEY, defaultAccount));
+}
+
+export function saveAccount(account: AccountSummary): boolean {
+  return setJson(STORAGE_KEY, account);
 }
 
 // ─── Positions ─────────────────────────────────────────────────────
-export function getPositions(): Position[] {
-  return getJson<Position[]>(POSITIONS_KEY, []);
+/**
+ * T+1: shares bought on an earlier Shanghai calendar date become sellable.
+ * Positions carry `todayBought` + `lastBuyDate`; availableQuantity is derived here.
+ * (Next calendar day is used as "next trading day"; no exchange calendar is bundled.)
+ */
+export function applyT1(positions: Position[], today: string = shanghaiDate()): Position[] {
+  return positions.map((p) => {
+    const todayBought = p.lastBuyDate === today ? Math.min(p.todayBought ?? 0, p.quantity) : 0;
+    return { ...p, todayBought, availableQuantity: Math.max(0, p.quantity - todayBought) };
+  });
 }
 
-export function savePositions(positions: Position[]): void {
-  setJson(POSITIONS_KEY, positions);
+export function getPositions(): Position[] {
+  return applyT1(clone(getJson<Position[]>(POSITIONS_KEY, [])));
+}
+
+export function savePositions(positions: Position[]): boolean {
+  return setJson(POSITIONS_KEY, positions);
 }
 
 // ─── Transactions ──────────────────────────────────────────────────
@@ -59,8 +113,8 @@ export function getTransactions(): AccountTransaction[] {
   return getJson<AccountTransaction[]>(TRANSACTIONS_KEY, []);
 }
 
-export function saveTransactions(transactions: AccountTransaction[]): void {
-  setJson(TRANSACTIONS_KEY, transactions);
+export function saveTransactions(transactions: AccountTransaction[]): boolean {
+  return setJson(TRANSACTIONS_KEY, transactions);
 }
 
 // ─── Portfolio History ─────────────────────────────────────────────
@@ -68,16 +122,16 @@ export function getPortfolioHistory(): PortfolioHistory[] {
   return getJson<PortfolioHistory[]>(HISTORY_KEY, []);
 }
 
-export function savePortfolioHistory(history: PortfolioHistory[]): void {
-  setJson(HISTORY_KEY, history);
+export function savePortfolioHistory(history: PortfolioHistory[]): boolean {
+  return setJson(HISTORY_KEY, history);
 }
 
-export function recordPortfolioSnapshot(
-  accountOverride?: AccountSummary
+/** Pure: computes the next history array including today's snapshot (no persistence). */
+export function buildPortfolioSnapshotHistory(
+  account: AccountSummary,
+  history: PortfolioHistory[] = getPortfolioHistory()
 ): PortfolioHistory[] {
-  const account = accountOverride ?? getAccount();
-  const history = getPortfolioHistory();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = shanghaiDate();
   const baseAssets = history[0]?.totalAssets ?? defaultAccount.totalAssets;
   const snapshot: PortfolioHistory = {
     date: today,
@@ -95,10 +149,15 @@ export function recordPortfolioSnapshot(
     nextHistory.push(snapshot);
   }
 
-  const normalized = nextHistory
+  return nextHistory
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-260);
+}
 
+export function recordPortfolioSnapshot(
+  accountOverride?: AccountSummary
+): PortfolioHistory[] {
+  const normalized = buildPortfolioSnapshotHistory(accountOverride ?? getAccount());
   savePortfolioHistory(normalized);
   return normalized;
 }
@@ -118,13 +177,13 @@ export function initializeAccount(): void {
     try {
       const parsed = JSON.parse(existingAccount) as AccountSummary;
       // 如果有有效的 availableCash，不要重置
-      if (typeof parsed.availableCash === 'number' && parsed.availableCash > 0) {
+      if (typeof parsed.availableCash === 'number' && Number.isFinite(parsed.availableCash) && parsed.availableCash >= 0) {
         // 只更新 positions 相关的字段，保留 availableCash
         const positions = getPositions();
         const marketValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
         const totalPnL = positions.reduce((sum, p) => sum + p.unrealizedPnL, 0);
         const todayPnL = positions.reduce((sum, p) => sum + p.todayPnL, 0);
-        const totalAssets = parsed.availableCash + marketValue;
+        const totalAssets = Math.round((parsed.availableCash + marketValue) * 100) / 100;
         const positionRatio = totalAssets > 0 ? marketValue / totalAssets : 0;
 
         const highRiskValue = positions.filter(p => p.riskLevel === 'high').reduce((sum, p) => sum + p.marketValue, 0);
@@ -170,7 +229,7 @@ export function initializeAccount(): void {
  * Useful for "reset demo" functionality.
  */
 export function resetAccount(): void {
-  saveAccount(defaultAccount);
+  saveAccount(clone(defaultAccount));
   savePositions(mockPositions);
   saveTransactions(mockTransactions);
   savePortfolioHistory(mockPortfolioHistory);
