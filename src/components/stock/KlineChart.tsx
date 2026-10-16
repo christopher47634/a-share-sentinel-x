@@ -1,12 +1,12 @@
 "use client";
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { KlineBar } from "@/mock/kline";
 import ChartTypeSwitcher, { ChartType } from "./ChartTypeSwitcher";
 import type { MarketStockDetail, MarketTimeframe } from "@/types/market";
+import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, LineData, Time, UTCTimestamp } from "lightweight-charts";
 
 type TimeFrame = "intraday" | MarketTimeframe;
 
@@ -27,10 +27,8 @@ const TIMEFRAME_COPY: Record<TimeFrame, string> = {
 };
 
 function formatIntradayTime(timestamp: number): string {
-  const date = new Date(timestamp * 1000);
-  const hour = `${date.getHours()}`.padStart(2, "0");
-  const minute = `${date.getMinutes()}`.padStart(2, "0");
-  return `${hour}:${minute}`;
+  const { hour, minute } = shanghaiClock(timestamp);
+  return `${`${hour}`.padStart(2, "0")}:${`${minute}`.padStart(2, "0")}`;
 }
 
 function getTimeFromChartTick(time: unknown): number | null {
@@ -49,14 +47,13 @@ function getTimeFromChartTick(time: unknown): number | null {
 }
 
 function shouldShowIntradayAxisTick(timestamp: number): boolean {
-  const date = new Date(timestamp * 1000);
-  const hour = date.getHours();
-  const minute = date.getMinutes();
+  const { hour, minute } = shanghaiClock(timestamp);
   return minute === 0 || (minute === 30 && hour >= 9 && hour <= 11);
 }
 
 function formatDateLabel(timestamp: number): string {
   return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
     year: "2-digit",
     month: "2-digit",
     day: "2-digit",
@@ -98,6 +95,79 @@ function generateSVGPath(data: KlineBar[]): string {
   return `M${points.join(" L")}`;
 }
 
+type ChartModule = typeof import("lightweight-charts");
+type PriceSeries = ISeriesApi<"Candlestick"> | ISeriesApi<"Bar"> | ISeriesApi<"Area"> | ISeriesApi<"Line">;
+
+const UP = "#34D399";
+const DOWN = "#F87171";
+const GOLD = "#D4A574";
+
+/** K 线时间戳按北京时间读时分，海外用户看到的仍是 A 股交易时段 */
+function shanghaiClock(timestamp: number): { hour: number; minute: number } {
+  const shifted = new Date((timestamp + 8 * 3600) * 1000);
+  return { hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() };
+}
+
+const asTime = (seconds: number) => seconds as UTCTimestamp;
+
+function toPriceData(type: ChartType, bars: KlineBar[]): (CandlestickData | LineData)[] {
+  if (type === "candlestick" || type === "bar") {
+    return bars.map((d) => ({ time: asTime(d.time), open: d.open, high: d.high, low: d.low, close: d.close }));
+  }
+  return bars.map((d) => ({ time: asTime(d.time), value: d.close }));
+}
+
+function toVolumeData(bars: KlineBar[]): HistogramData[] {
+  return bars.map((d) => ({
+    time: asTime(d.time),
+    value: d.volume,
+    color: d.close >= d.open ? "rgba(52,211,153,0.35)" : "rgba(248,113,113,0.35)",
+  }));
+}
+
+function addPriceSeries(chart: IChartApi, lc: ChartModule, type: ChartType): PriceSeries {
+  switch (type) {
+    case "area":
+      return chart.addSeries(lc.AreaSeries, {
+        lineColor: GOLD,
+        topColor: "rgba(212,165,116,0.28)",
+        bottomColor: "rgba(212,165,116,0.0)",
+        lineWidth: 2,
+      });
+    case "line":
+      return chart.addSeries(lc.LineSeries, { color: GOLD, lineWidth: 2 });
+    case "bar":
+      return chart.addSeries(lc.BarSeries, { upColor: UP, downColor: DOWN });
+    case "candlestick":
+    default:
+      return chart.addSeries(lc.CandlestickSeries, {
+        upColor: UP,
+        downColor: DOWN,
+        borderDownColor: DOWN,
+        borderUpColor: UP,
+        wickDownColor: DOWN,
+        wickUpColor: UP,
+      });
+  }
+}
+
+/** 让全部 K 线铺满可视宽度 */
+function fillVisibleRange(chart: IChartApi, container: HTMLElement | null, bars: KlineBar[]) {
+  if (bars.length === 0) return;
+  const width = container?.clientWidth ?? 0;
+  const barCount = Math.max(bars.length, 1);
+  const barSpacing = width > 0 ? Math.max(2.2, Math.min(16, width / barCount)) : 6;
+  chart.timeScale().applyOptions({
+    barSpacing,
+    minBarSpacing: 1,
+    rightOffset: 0,
+    fixLeftEdge: true,
+    fixRightEdge: true,
+    lockVisibleTimeRangeOnResize: true,
+  });
+  chart.timeScale().setVisibleLogicalRange({ from: -0.5, to: Math.max(barCount - 0.5, 0.5) });
+}
+
 interface KlineChartProps {
   data: KlineBar[];
   stockCode: string;
@@ -105,10 +175,10 @@ interface KlineChartProps {
 
 export default function KlineChart({ data, stockCode }: KlineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<any>(null);
-  const priceSeriesRef = useRef<any>(null);
-  const volumeSeriesRef = useRef<any>(null);
-  const modulesRef = useRef<any>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const priceSeriesRef = useRef<PriceSeries | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const modulesRef = useRef<ChartModule | null>(null);
   const requestRef = useRef(0);
 
   const [activeTab, setActiveTab] = useState<TimeFrame>("day");
@@ -119,6 +189,7 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
   const [periodError, setPeriodError] = useState("");
   const [chartType, setChartType] = useState<ChartType>("candlestick");
   const [showVolume, setShowVolume] = useState(true);
+  /** 图表实例已建好（lightweight-charts 是动态加载的） */
   const [loaded, setLoaded] = useState(false);
 
   const isIntraday = activeTab === "intraday";
@@ -131,9 +202,7 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
     const lastIndex = Math.max(chartData.length - 1, 1);
 
     chartData.forEach((bar, index) => {
-      const date = new Date(bar.time * 1000);
-      const hour = date.getHours();
-      const minute = date.getMinutes();
+      const { hour, minute } = shanghaiClock(bar.time);
       const isFirst = index === 0;
       const isLast = index === chartData.length - 1;
       const isMorningHour = minute === 30 && hour >= 9 && hour <= 11;
@@ -164,121 +233,21 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
     setPeriodLoading(false);
   }, [stockCode, data]);
 
-  const fillVisibleRange = useCallback((chart: any, klineData: KlineBar[]) => {
-    if (!chart || klineData.length === 0) return;
+  // ResizeObserver 回调里要拿到最新数据，但不应该因为数据变化重新注册
+  const chartDataRef = useRef(chartData);
+  chartDataRef.current = chartData;
+  const chartTypeRef = useRef(chartType);
+  chartTypeRef.current = chartType;
 
-    const width = containerRef.current?.clientWidth ?? 0;
-    const barCount = Math.max(klineData.length, 1);
-    const barSpacing = width > 0 ? Math.max(2.2, Math.min(16, width / barCount)) : 6;
-
-    chart.timeScale().applyOptions({
-      barSpacing,
-      minBarSpacing: 1,
-      rightOffset: 0,
-      fixLeftEdge: true,
-      fixRightEdge: true,
-      lockVisibleTimeRangeOnResize: true,
-    });
-
-    chart.timeScale().setVisibleLogicalRange({
-      from: -0.5,
-      to: Math.max(barCount - 0.5, 0.5),
-    });
-  }, []);
-
-  const createPriceSeries = useCallback(
-    (chart: any, lc: any, klineData: KlineBar[]) => {
-      let series: any;
-      switch (chartType) {
-        case "candlestick":
-          series = chart.addSeries(lc.CandlestickSeries, {
-            upColor: "#34D399",
-            downColor: "#F87171",
-            borderDownColor: "#F87171",
-            borderUpColor: "#34D399",
-            wickDownColor: "#F87171",
-            wickUpColor: "#34D399",
-          });
-          series.setData(
-            klineData.map((d) => ({
-              time: d.time as any,
-              open: d.open,
-              high: d.high,
-              low: d.low,
-              close: d.close,
-            }))
-          );
-          break;
-        case "area":
-          series = chart.addSeries(lc.AreaSeries, {
-            lineColor: "#D4A574",
-            topColor: "rgba(212,165,116,0.28)",
-            bottomColor: "rgba(212,165,116,0.0)",
-            lineWidth: 2,
-          });
-          series.setData(klineData.map((d) => ({ time: d.time as any, value: d.close })));
-          break;
-        case "line":
-          series = chart.addSeries(lc.LineSeries, {
-            color: "#D4A574",
-            lineWidth: 2,
-          });
-          series.setData(klineData.map((d) => ({ time: d.time as any, value: d.close })));
-          break;
-        case "bar":
-          series = chart.addSeries(lc.BarSeries, {
-            upColor: "#34D399",
-            downColor: "#F87171",
-          });
-          series.setData(
-            klineData.map((d) => ({
-              time: d.time as any,
-              open: d.open,
-              high: d.high,
-              low: d.low,
-              close: d.close,
-            }))
-          );
-          break;
-      }
-      return series;
-    },
-    [chartType]
-  );
-
-  const createVolumeSeries = useCallback((chart: any, lc: any, klineData: KlineBar[]) => {
-    const series = chart.addSeries(lc.HistogramSeries, {
-      color: "#26a69a",
-      priceFormat: { type: "volume" },
-      priceScaleId: "volume",
-    });
-    chart.priceScale("volume").applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 },
-    });
-    series.setData(
-      klineData.map((d) => ({
-        time: d.time as any,
-        value: d.volume,
-        color: d.close >= d.open ? "rgba(52,211,153,0.35)" : "rgba(248,113,113,0.35)",
-      }))
-    );
-    return series;
-  }, []);
-
+  // 1. 图表实例：只在挂载时创建一次。切换周期、换数据、换图表类型都不再销毁重建。
   useEffect(() => {
-    if (!containerRef.current || chartData.length === 0) return;
-
-    let chart: any = null;
+    let chart: IChartApi | null = null;
     let resizeObserver: ResizeObserver | null = null;
     // effect 清理后，挂起中的 initChart 不能再建图；容器宽度一直为 0 时最多重试约 5 秒
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
     const MAX_ATTEMPTS = 25;
-    setLoaded(false);
-    chartRef.current = null;
-    priceSeriesRef.current = null;
-    volumeSeriesRef.current = null;
 
     const initChart = async () => {
       try {
@@ -295,7 +264,6 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
         if (cancelled || !containerRef.current) return;
 
         containerRef.current.innerHTML = "";
-
         chart = lc.createChart(containerRef.current, {
           width: containerRef.current.clientWidth,
           height: 320,
@@ -310,60 +278,35 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
           },
           crosshair: {
             mode: lc.CrosshairMode.Normal,
-            vertLine: {
-              color: "rgba(212, 165, 116, 0.4)",
-              labelBackgroundColor: "#D4A574",
-            },
-            horzLine: {
-              color: "rgba(212, 165, 116, 0.4)",
-              labelBackgroundColor: "#D4A574",
-            },
+            vertLine: { color: "rgba(212, 165, 116, 0.4)", labelBackgroundColor: "#D4A574" },
+            horzLine: { color: "rgba(212, 165, 116, 0.4)", labelBackgroundColor: "#D4A574" },
           },
-          rightPriceScale: {
-            borderColor: "rgba(255, 255, 255, 0.06)",
-          },
+          rightPriceScale: { borderColor: "rgba(255, 255, 255, 0.06)" },
           timeScale: {
             borderColor: "rgba(255, 255, 255, 0.06)",
-            timeVisible: usesMinuteAxis,
             secondsVisible: false,
             rightOffset: 0,
             fixLeftEdge: true,
             fixRightEdge: true,
             lockVisibleTimeRangeOnResize: true,
-            tickMarkFormatter: usesMinuteAxis
-              ? (time: unknown) => {
-                  const timestamp = getTimeFromChartTick(time);
-                  if (!timestamp || !shouldShowIntradayAxisTick(timestamp)) return "";
-                  return formatIntradayTime(timestamp);
-                }
-              : undefined,
           },
         });
 
         chartRef.current = chart;
         modulesRef.current = lc;
+        setLoaded(true);
 
-        priceSeriesRef.current = createPriceSeries(chart, lc, chartData);
-        if (showVolume) {
-          volumeSeriesRef.current = createVolumeSeries(chart, lc, chartData);
-        }
-
-        fillVisibleRange(chart, chartData);
-        setTimeout(() => {
-          if (!cancelled) setLoaded(true);
-        }, 100);
-
+        const observed = chart;
         resizeObserver = new ResizeObserver((entries) => {
-          if (entries[0] && chart) {
-            chart.applyOptions({ width: entries[0].contentRect.width });
-            requestAnimationFrame(() => fillVisibleRange(chart, chartData));
-          }
+          if (!entries[0]) return;
+          observed.applyOptions({ width: entries[0].contentRect.width });
+          requestAnimationFrame(() => fillVisibleRange(observed, containerRef.current, chartDataRef.current));
         });
         resizeObserver.observe(containerRef.current);
       } catch (err) {
         console.error("Lightweight Charts init failed:", err);
         if (containerRef.current) {
-          const path = generateSVGPath(chartData);
+          const path = generateSVGPath(chartDataRef.current);
           containerRef.current.innerHTML = `
             <svg width="100%" height="320" viewBox="0 0 800 320" preserveAspectRatio="none">
               <defs>
@@ -386,53 +329,84 @@ export default function KlineChart({ data, stockCode }: KlineChartProps) {
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
-      if (resizeObserver) resizeObserver.disconnect();
-      if (chart) {
-        chart.remove();
-        chart = null;
-      }
+      resizeObserver?.disconnect();
+      chart?.remove();
       chartRef.current = null;
       priceSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      modulesRef.current = null;
     };
-  }, [chartData, activeTab, createPriceSeries, createVolumeSeries, fillVisibleRange, showVolume, usesMinuteAxis]);
+  }, []);
 
+  // 2. 横轴：分时 / 1 分 K 显示时刻，其余显示日期
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !loaded) return;
+    chart.applyOptions({
+      timeScale: {
+        timeVisible: usesMinuteAxis,
+        tickMarkFormatter: usesMinuteAxis
+          ? (time: Time) => {
+              const timestamp = getTimeFromChartTick(time);
+              if (!timestamp || !shouldShowIntradayAxisTick(timestamp)) return "";
+              return formatIntradayTime(timestamp);
+            }
+          : undefined,
+      },
+    });
+  }, [usesMinuteAxis, loaded]);
+
+  // 3. 价格序列：只有图表类型变了才换序列（不同类型是不同的 series）
   useEffect(() => {
     const chart = chartRef.current;
     const lc = modulesRef.current;
     if (!chart || !lc || !loaded) return;
-
-    if (priceSeriesRef.current) {
+    const series = addPriceSeries(chart, lc, chartType);
+    series.setData(toPriceData(chartType, chartDataRef.current));
+    priceSeriesRef.current = series;
+    fillVisibleRange(chart, containerRef.current, chartDataRef.current);
+    return () => {
       try {
-        chart.removeSeries(priceSeriesRef.current);
+        chart.removeSeries(series);
       } catch {
-        /* series may already be gone */
+        /* 图表已销毁 */
       }
-      priceSeriesRef.current = null;
-    }
+      if (priceSeriesRef.current === series) priceSeriesRef.current = null;
+    };
+  }, [chartType, loaded]);
 
-    priceSeriesRef.current = createPriceSeries(chart, lc, chartData);
-    fillVisibleRange(chart, chartData);
-  }, [chartType, loaded, chartData, createPriceSeries, fillVisibleRange]);
-
+  // 4. 成交量序列：开关切换时增删
   useEffect(() => {
     const chart = chartRef.current;
     const lc = modulesRef.current;
-    if (!chart || !lc || !loaded) return;
-
-    if (showVolume) {
-      if (!volumeSeriesRef.current) {
-        volumeSeriesRef.current = createVolumeSeries(chart, lc, chartData);
-      }
-    } else if (volumeSeriesRef.current) {
+    if (!chart || !lc || !loaded || !showVolume) return;
+    const series = chart.addSeries(lc.HistogramSeries, {
+      color: "#26a69a",
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+    series.setData(toVolumeData(chartDataRef.current));
+    volumeSeriesRef.current = series;
+    return () => {
       try {
-        chart.removeSeries(volumeSeriesRef.current);
+        chart.removeSeries(series);
       } catch {
-        /* already removed */
+        /* 图表已销毁 */
       }
-      volumeSeriesRef.current = null;
-    }
-  }, [showVolume, loaded, chartData, createVolumeSeries]);
+      if (volumeSeriesRef.current === series) volumeSeriesRef.current = null;
+    };
+  }, [showVolume, loaded]);
+
+  // 5. 数据：切换周期、换股票时只替换数据，不重建图表
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !loaded) return;
+    // 图表类型变化由第 3 步负责（它会用最新数据建新序列），这里只跟数据走，类型从 ref 读
+    priceSeriesRef.current?.setData(toPriceData(chartTypeRef.current, chartData));
+    volumeSeriesRef.current?.setData(toVolumeData(chartData));
+    fillVisibleRange(chart, containerRef.current, chartData);
+  }, [chartData, loaded]);
 
   async function handleTabSwitch(tab: TimeFrame) {
     if (tab === activeTab) return;
