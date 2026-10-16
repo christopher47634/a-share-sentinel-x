@@ -70,10 +70,10 @@ function accountFor(c: AlertEvalCase): SentinelAccount | undefined {
     unrealizedPnlPct: costPrice > 0 ? ((c.stock.price - costPrice) / costPrice) * 100 : 0,
     ...p,
   };
-  const totalAsset = marketValue / position.positionRatio;
+  const totalAssets = marketValue / position.positionRatio;
   return {
-    totalAsset,
-    cash: totalAsset - marketValue,
+    totalAssets,
+    cash: totalAssets - marketValue,
     marketValue,
     todayPnl: 0,
     totalPnl: 0,

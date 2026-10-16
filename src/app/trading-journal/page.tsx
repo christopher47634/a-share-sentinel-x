@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
 import {
-  runSentinelCore,
   type Alert,
   type AlertLevel,
 } from "@/lib/sentinel-core";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
-import DemoDataBadge from "@/components/common/DemoDataBadge";
+import SentinelDataBadge from "@/components/common/SentinelDataBadge";
+import { useSentinelCore } from "@/hooks/useSentinelCore";
 
 const DISCLAIMER = "本页面仅用于模拟实盘、市场观察和学习演示，不构成投资建议。";
 
@@ -96,7 +95,7 @@ function ReviewSectionCard({ title, body }: { title: string; body: string }) {
 }
 
 export default function TradingJournalPage() {
-  const sentinel = useMemo(() => runSentinelCore(), []);
+  const { sentinel, source } = useSentinelCore();
   const { journal, alerts, risk, marketRadar } = sentinel;
   const reviewSections = parseReviewSections(journal.reviewText);
 
@@ -111,7 +110,7 @@ export default function TradingJournalPage() {
           <div className="relative">
             <div className="mb-3 text-xs font-semibold uppercase tracking-[0.32em] text-violet-300">Trading Journal</div>
             <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-              <div><h1 className="text-4xl font-semibold tracking-tight text-white">AI 盘后复盘<DemoDataBadge /></h1><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">将账户表现、市场环境、提醒质量、模拟交易、风险变化和交易计划执行情况沉淀为可复盘的投资日志。</p></div>
+              <div><h1 className="text-4xl font-semibold tracking-tight text-white">AI 盘后复盘<SentinelDataBadge source={source} /></h1><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">将账户表现、市场环境、提醒质量、模拟交易、风险变化和交易计划执行情况沉淀为可复盘的投资日志。</p></div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4"><div className="text-xs uppercase tracking-[0.22em] text-slate-500">Review Date</div><div className="mt-2 text-2xl font-semibold text-slate-50">{journal.date}</div></div>
             </div>
           </div>
@@ -135,7 +134,7 @@ export default function TradingJournalPage() {
                 <div className="text-[10px] uppercase tracking-[0.2em] text-cyan-300 mb-2">Local Paper Account</div>
                 <div className="space-y-1 text-xs text-[var(--text-secondary)]">
                   <div>本地持仓 {snapshot?.positions.length} 只 | 市值 ¥{(snapshot?.positionMarketValue ?? 0).toLocaleString("zh-CN")}</div>
-                  {snapshot?.cash !== undefined && <div>现金 ¥{snapshot.cash.toLocaleString("zh-CN")} | 总资产 ¥{(snapshot.totalAsset ?? 0).toLocaleString("zh-CN")}</div>}
+                  {snapshot?.cash !== undefined && <div>现金 ¥{snapshot.cash.toLocaleString("zh-CN")} | 总资产 ¥{(snapshot.totalAssets ?? 0).toLocaleString("zh-CN")}</div>}
                   <div>更新于 {new Date(snapshot?.updatedAt || "").toLocaleTimeString("zh-CN")}</div>
                 </div>
               </div>

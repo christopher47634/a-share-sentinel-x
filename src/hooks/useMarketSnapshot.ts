@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useVisiblePolling } from "./useVisiblePolling";
 import { stocks } from "@/mock/stocks";
 import type { MarketQuote, MarketSnapshot } from "@/types/market";
 
 export const DEFAULT_LIVE_STOCK_CODES = stocks.slice(0, 32).map((item) => item.code);
 const MOCK_UPDATED_AT = "2026-06-18T07:00:00.000Z";
+/** 页面可见时的刷新间隔；与 /api/market/snapshot 的 s-maxage=30 对齐 */
+const REFRESH_MS = 30_000;
 
 function fallbackQuote(stock: (typeof stocks)[number]): MarketQuote {
   return {
@@ -17,12 +20,7 @@ function fallbackQuote(stock: (typeof stocks)[number]): MarketQuote {
   };
 }
 
-export function parseAmountYi(value: string): number {
-  const num = Number.parseFloat(String(value).replace(/,/g, ""));
-  if (!Number.isFinite(num)) return 0;
-  if (/\u4e07/.test(value)) return num / 10_000;
-  return num;
-}
+export { parseAmountYi } from "@/lib/market-format";
 
 export function useMarketSnapshot(codes: string[] = DEFAULT_LIVE_STOCK_CODES) {
   const fallbackQuotes = useMemo(() => {
@@ -34,22 +32,23 @@ export function useMarketSnapshot(codes: string[] = DEFAULT_LIVE_STOCK_CODES) {
   const [sourceLabel, setSourceLabel] = useState("Mock fallback");
   const [fallbackUsed, setFallbackUsed] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    const query = encodeURIComponent(codes.join(","));
-    fetch(`/api/market/snapshot?codes=${query}`, { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("snapshot_fetch_failed"))))
-      .then((snapshot: MarketSnapshot) => {
-        if (cancelled || !snapshot.quotes?.length) return;
-        setQuotes(snapshot.quotes);
-        setSourceLabel(snapshot.sourceLabel);
-        setFallbackUsed(snapshot.fallbackUsed);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [codes]);
+  // 用代码串做依赖：调用方每次渲染传新数组也不会重复请求
+  const codesKey = codes.join(",");
+
+  // 页面可见时每 30 秒刷新一次；切到后台暂停，回到前台立刻补一次
+  useVisiblePolling(
+    async (isCancelled) => {
+      const response = await fetch(`/api/market/snapshot?codes=${encodeURIComponent(codesKey)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("snapshot_fetch_failed");
+      const snapshot = (await response.json()) as MarketSnapshot;
+      if (isCancelled() || !snapshot.quotes?.length) return;
+      setQuotes(snapshot.quotes);
+      setSourceLabel(snapshot.sourceLabel);
+      setFallbackUsed(snapshot.fallbackUsed);
+    },
+    REFRESH_MS,
+    codesKey
+  );
 
   return { quotes, sourceLabel, fallbackUsed };
 }

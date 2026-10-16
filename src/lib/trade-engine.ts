@@ -114,6 +114,10 @@ function finalize(
   }
   setTimeout(() => updateOrderStatus(order.id, 'filled'), 100)
   void syncLocalLedgerSnapshot(reason)
+  // 账户相关页面（Sentinel、持仓）监听这个事件按新账本重算
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('sentinel:account-updated'))
+  }
   return { success: true, order, updatedAccount }
 }
 
@@ -259,14 +263,18 @@ export function executeSell(params: SellParams): TradeResult {
   ], updatedAccount, 'trade-sell')
 }
 
-export function getMaxBuyQuantity(price: number): number {
-  if (!Number.isFinite(price) || price <= 0) return 0
-  const account = getAccount()
-  const cashCents = toCents(account.availableCash)
+/** 按给定现金算最多能买多少股（整手，含佣金）。纯函数，界面可以用已读到的现金直接算 */
+export function maxBuyQuantityFor(cash: number, price: number): number {
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(cash) || cash <= 0) return 0
+  const cashCents = toCents(cash)
   const lotCents = amountCents(price, 100)
   if (lotCents <= 0) return 0
   const costPerLot = lotCents + commissionCents(lotCents)
   return Math.floor(cashCents / costPerLot) * 100
+}
+
+export function getMaxBuyQuantity(price: number): number {
+  return maxBuyQuantityFor(getAccount().availableCash, price)
 }
 
 export function getAvailableSellQuantity(stockCode: string): number {

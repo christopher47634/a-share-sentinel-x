@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import ClientTime from "@/components/common/ClientTime";
 import type { AgentState, AgentRole, AgentStatus } from "@/types/agent";
 
 interface Props {
@@ -185,7 +186,8 @@ function AnimatedTooltip({
         <div className="flex items-center gap-2 text-[10px]">
           <span className="text-[var(--text-muted)]">Last run:</span>
           <span className="font-mono text-[var(--text-secondary)]">
-            {agent.lastRunAt}
+            {/* lastRunAt 是渲染时按当前时间生成的，必须挂载后再显示，否则和预渲染的 HTML 对不上 */}
+            <ClientTime value={agent.lastRunAt} seconds />
           </span>
         </div>
 

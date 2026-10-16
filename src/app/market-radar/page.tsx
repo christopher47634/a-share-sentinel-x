@@ -1,7 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
-import { runSentinelCore } from "@/lib/sentinel-core";
 import DesktopShell from "@/components/layout/DesktopShell";
 import GlassCard from "@/components/common/GlassCard";
 import { motion } from "framer-motion";
@@ -11,7 +9,9 @@ import type {
   SentinelStock,
 } from "@/lib/sentinel-core";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
-import DemoDataBadge from "@/components/common/DemoDataBadge";
+import SentinelDataBadge from "@/components/common/SentinelDataBadge";
+import ClientTime from "@/components/common/ClientTime";
+import { useSentinelCore } from "@/hooks/useSentinelCore";
 
 // ─── helpers ───
 
@@ -216,15 +216,13 @@ function StockRow({
 // ─── page ───
 
 export default function MarketRadarPage() {
-  const sentinel = useMemo(() => runSentinelCore(), []);
+  const { sentinel, source } = useSentinelCore();
   const { marketRadar } = sentinel;
 
   // ─── Local Portfolio Sync ───
   const { isHeld } = useLocalSentinelAccount();
 
   const regimeStyle = regimeBadge(marketRadar.marketRegime);
-  const now = new Date();
-  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
   // stagger helper
   const stagger = (i: number) => ({
@@ -248,7 +246,7 @@ export default function MarketRadarPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               Market Radar
-              <DemoDataBadge />
+              <SentinelDataBadge source={source} />
             </h1>
             <p className="text-sm text-[var(--text-muted)] mt-0.5">
               AI 自动看盘雷达
@@ -256,7 +254,7 @@ export default function MarketRadarPage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono text-[var(--text-secondary)]">
-              {timeStr}
+              <ClientTime />
             </span>
             <span
               className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider"

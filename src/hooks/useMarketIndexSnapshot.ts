@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useVisiblePolling } from "./useVisiblePolling";
 import { marketIndices } from "@/mock/market";
 import type { MarketIndexSnapshot, MarketQuote } from "@/types/market";
 
 const MOCK_UPDATED_AT = "2026-06-18T07:00:00.000Z";
+/** 页面可见时的刷新间隔 */
+const REFRESH_MS = 30_000;
 
 function fallbackQuote(index: (typeof marketIndices)[number]): MarketQuote {
   const prevClose = index.price - index.changeAmount;
@@ -53,18 +56,13 @@ function buildFallbackSnapshot(): MarketIndexSnapshot {
 export function useMarketIndexSnapshot() {
   const [snapshot, setSnapshot] = useState<MarketIndexSnapshot>(() => buildFallbackSnapshot());
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/market/indices", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("index_fetch_failed"))))
-      .then((nextSnapshot: MarketIndexSnapshot) => {
-        if (!cancelled && nextSnapshot.indices?.length) setSnapshot(nextSnapshot);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // 页面可见时每 30 秒刷新一次；切到后台暂停，回到前台立刻补一次
+  useVisiblePolling(async (isCancelled) => {
+    const response = await fetch("/api/market/indices", { cache: "no-store" });
+    if (!response.ok) throw new Error("index_fetch_failed");
+    const nextSnapshot = (await response.json()) as MarketIndexSnapshot;
+    if (!isCancelled() && nextSnapshot.indices?.length) setSnapshot(nextSnapshot);
+  }, REFRESH_MS);
 
   return snapshot;
 }

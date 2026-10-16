@@ -11,6 +11,10 @@ export interface MarketQuote {
   turnover: string;
   turnoverRate: number;
   marketCap: string;
+  /** 成交额（元）。实时行情才有；mock 只有格式化字符串 turnover */
+  turnoverValue?: number;
+  /** 成交量（手）。实时行情才有 */
+  volumeLots?: number;
   pe: number;
   high: number;
   low: number;

@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useEffect, useCallback } from "react";
-import { runSentinelCore, generateSentinelDemoData } from "@/lib/sentinel-core";
 import { type WatchRule, loadRules, addRule, removeRule, toggleRule, parseThreshold } from "@/lib/watch-rule-storage";
 import { evaluateWatchRules, explainRuleTrigger } from "@/lib/watch-rule-engine";
 import DesktopShell from "@/components/layout/DesktopShell";
@@ -9,7 +8,8 @@ import GlassCard from "@/components/common/GlassCard";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AlertLevel, SignalType, Alert, Signal } from "@/lib/sentinel-core";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
-import DemoDataBadge from "@/components/common/DemoDataBadge";
+import SentinelDataBadge from "@/components/common/SentinelDataBadge";
+import { useSentinelCore } from "@/hooks/useSentinelCore";
 import ClientTime from "@/components/common/ClientTime";
 
 // ─── helpers ───
@@ -342,8 +342,7 @@ function SignalTable({ signals }: { signals: Signal[] }) {
 // ─── page ───
 
 export default function WatchTowerPage() {
-  const sentinel = useMemo(() => runSentinelCore(), []);
-  const demoData = useMemo(() => generateSentinelDemoData(), []);
+  const { sentinel, data, source } = useSentinelCore();
   const { signals, alerts } = sentinel;
 
   // ─── Local Portfolio Sync ───
@@ -361,8 +360,8 @@ export default function WatchTowerPage() {
   }, []);
 
   const userTriggers = useMemo(
-    () => evaluateWatchRules(rules, demoData.stocks, demoData.sectors),
-    [rules, demoData]
+    () => evaluateWatchRules(rules, data.stocks, data.sectors),
+    [rules, data]
   );
 
   const handleAddRule = useCallback(() => {
@@ -424,7 +423,7 @@ export default function WatchTowerPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               Watch Tower
-              <DemoDataBadge />
+              <SentinelDataBadge source={source} />
             </h1>
             <p className="text-sm text-[var(--text-muted)] mt-0.5">
               AI 自动盯盘塔

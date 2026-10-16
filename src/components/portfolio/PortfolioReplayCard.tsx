@@ -14,6 +14,7 @@ import type {
   PortfolioHistory,
 } from "@/types/account";
 import { cn, formatCurrency } from "@/lib/utils";
+import { shanghaiDate } from "@/lib/time";
 
 interface PortfolioReplayCardProps {
   account: AccountSummary;
@@ -50,7 +51,7 @@ export default function PortfolioReplayCard({
       ? sortedHistory
       : [
           {
-            date: new Date().toISOString().slice(0, 10),
+            date: shanghaiDate(),
             totalAssets: account.totalAssets,
             marketValue: account.marketValue,
             cash: account.availableCash,

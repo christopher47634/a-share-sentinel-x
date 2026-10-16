@@ -1,15 +1,14 @@
 "use client";
 
-import { useMemo } from "react";
 import {
-  runSentinelCore,
   type Alert,
   type AlertLevel,
   type RiskItem,
   type RiskLevel,
 } from "@/lib/sentinel-core";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
-import DemoDataBadge from "@/components/common/DemoDataBadge";
+import SentinelDataBadge from "@/components/common/SentinelDataBadge";
+import { useSentinelCore } from "@/hooks/useSentinelCore";
 
 const DISCLAIMER = "本页面仅用于模拟实盘、市场观察和学习演示，不构成投资建议。";
 
@@ -128,7 +127,7 @@ function AlertRiskCard({ alert }: { alert: Alert }) {
 }
 
 export default function RiskShieldPage() {
-  const sentinel = useMemo(() => runSentinelCore(), []);
+  const { sentinel, source } = useSentinelCore();
   const { risk, alerts, marketRadar } = sentinel;
   const riskAlerts = alerts.filter(a => a.level === "Risk");
   const highAlerts = alerts.filter(a => a.level === "High");
@@ -146,7 +145,7 @@ export default function RiskShieldPage() {
           <div className="relative">
             <div className="mb-3 text-xs font-semibold uppercase tracking-[0.32em] text-cyan-300">Risk Shield</div>
             <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-              <div><h1 className="text-4xl font-semibold tracking-tight text-white">风险护盾<DemoDataBadge /></h1><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">从模拟账户、持仓集中度、市场状态、AI 盯盘提醒和交易计划偏离中识别组合风险，帮助用户理解“风险来自哪里”。</p></div>
+              <div><h1 className="text-4xl font-semibold tracking-tight text-white">风险护盾<SentinelDataBadge source={source} /></h1><p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">从模拟账户、持仓集中度、市场状态、AI 盯盘提醒和交易计划偏离中识别组合风险，帮助用户理解“风险来自哪里”。</p></div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4"><div className="text-xs uppercase tracking-[0.22em] text-slate-500">Current Risk</div><div className="mt-2 flex items-center gap-3"><RiskBadge level={risk.overallRiskLevel} /><span className="text-2xl font-semibold text-slate-50">{risk.riskScore}/100</span></div></div>
             </div>
           </div>

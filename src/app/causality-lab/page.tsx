@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { runSentinelCore } from "@/lib/sentinel-core";
+import { useState } from "react";
 import DesktopShell from "@/components/layout/DesktopShell";
 import GlassCard from "@/components/common/GlassCard";
 import { motion, AnimatePresence } from "framer-motion";
@@ -19,7 +18,8 @@ import {
   Activity,
 } from "lucide-react";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
-import DemoDataBadge from "@/components/common/DemoDataBadge";
+import SentinelDataBadge from "@/components/common/SentinelDataBadge";
+import { useSentinelCore } from "@/hooks/useSentinelCore";
 
 // ─── Evidence Chain step definition ───
 const EVIDENCE_STEPS = [
@@ -33,7 +33,8 @@ const EVIDENCE_STEPS = [
 ] as const;
 
 export default function CausalityLabPage() {
-  const { causalityReports } = useMemo(() => runSentinelCore(), []);
+  const { sentinel, source } = useSentinelCore();
+  const { causalityReports } = sentinel;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const report = causalityReports[selectedIndex];
 
@@ -68,7 +69,7 @@ export default function CausalityLabPage() {
               <div>
                 <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
                   AI 归因解盘实验室
-                  <DemoDataBadge />
+                  <SentinelDataBadge source={source} />
                 </h1>
                 <p className="text-xs text-[var(--text-muted)]">
                   Causality Lab — 分层归因 + 证据链

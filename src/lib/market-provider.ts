@@ -2,6 +2,7 @@ import { getKlineData } from "@/mock/kline";
 import { getStockByCode, stocks } from "@/mock/stocks";
 import { marketIndices } from "@/mock/market";
 import { buildMarketAnalysis } from "@/lib/market-indicators";
+import { parseAmountYi } from "@/lib/market-format";
 import type {
   MarketBreadth,
   MarketCandle,
@@ -395,6 +396,8 @@ async function fetchEastmoneyQuote(code: string, kind: SecurityKind): Promise<Ma
     turnover: formatCny100M(turnoverValue),
     turnoverRate,
     marketCap: formatCny100M(marketCapValue),
+    turnoverValue: turnoverValue ?? undefined,
+    volumeLots: volumeHands ?? undefined,
     pe,
     high,
     low,
@@ -459,6 +462,8 @@ async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<Mark
     turnover: formatCny100M(turnoverValue),
     turnoverRate,
     marketCap: marketCap100M === null ? "N/A" : formatCny100MFromUnit(marketCap100M),
+    turnoverValue: turnoverValue ?? undefined,
+    volumeLots: volumeHands ?? undefined,
     pe,
     high,
     low,
@@ -645,13 +650,6 @@ export async function getMarketSnapshot(codes?: string[]): Promise<MarketSnapsho
   };
 }
 
-function parseTurnoverYi(value: string): number {
-  const num = Number.parseFloat(value.replace(/,/g, ""));
-  if (!Number.isFinite(num)) return 0;
-  if (/\u4e07/.test(value)) return num / 10_000;
-  return num;
-}
-
 /** 两市总成交额只取上证指数 + 深证成指：创业板指属于深成指、科创50属于上证，加进来会重复计算 */
 const TURNOVER_INDEX_CODES = new Set(["000001", "399001"]);
 
@@ -661,7 +659,7 @@ function buildBreadthFromQuotes(quotes: MarketQuote[]): MarketBreadth {
   const flatCount = quotes.length - upCount - downCount;
   const turnoverYi = quotes
     .filter((item) => TURNOVER_INDEX_CODES.has(item.code))
-    .reduce((sum, item) => sum + parseTurnoverYi(item.turnover), 0);
+    .reduce((sum, item) => sum + parseAmountYi(item.turnover), 0);
   return {
     upCount,
     downCount,

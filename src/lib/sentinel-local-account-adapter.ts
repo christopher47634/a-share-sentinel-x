@@ -19,7 +19,7 @@ export interface LocalSentinelPosition {
 
 export interface LocalSentinelAccountSnapshot {
   cash?: number;
-  totalAsset?: number;
+  totalAssets?: number;
   positionMarketValue?: number;
   positions: LocalSentinelPosition[];
   updatedAt: string;
@@ -65,14 +65,14 @@ export function loadLocalSentinelAccountSnapshot(): LocalSentinelAccountSnapshot
   }));
 
   const positionMarketValue = account?.marketValue ?? mapped.reduce((sum, p) => sum + (p.marketValue ?? 0), 0);
-  const totalAsset = account?.totalAssets ?? (account?.availableCash ?? 0) + positionMarketValue;
+  const totalAssets = account?.totalAssets ?? (account?.availableCash ?? 0) + positionMarketValue;
   for (const p of mapped) {
-    p.positionRatio = totalAsset > 0 ? (p.marketValue ?? 0) / totalAsset : 0;
+    p.positionRatio = totalAssets > 0 ? (p.marketValue ?? 0) / totalAssets : 0;
   }
 
   return {
     cash: account?.availableCash,
-    totalAsset: account?.totalAssets,
+    totalAssets: account?.totalAssets,
     positionMarketValue,
     positions: mapped,
     updatedAt: new Date().toISOString(),

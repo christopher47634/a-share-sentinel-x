@@ -9,15 +9,12 @@ import LiveIntelligenceFeed from "@/components/ai/LiveIntelligenceFeed";
 import AgentStatusStrip from "@/components/ai/AgentStatusStrip";
 import { getAgentStates } from "@/lib/agent-orchestrator";
 import { shanghaiDate } from "@/lib/time";
-import {
-  runSentinelCore,
-  generateSentinelDemoData,
-} from "@/lib/sentinel-core";
 import type { RiskLevel, AlertLevel } from "@/lib/sentinel-core";
 import type { IntelligenceEvent, SentinelDimension, AgentStatus } from "@/types/agent";
 import { motion } from "framer-motion";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
-import DemoDataBadge from "@/components/common/DemoDataBadge";
+import SentinelDataBadge from "@/components/common/SentinelDataBadge";
+import { useSentinelCore } from "@/hooks/useSentinelCore";
 import ClientTime from "@/components/common/ClientTime";
 
 function formatMoney(val: number): string {
@@ -48,10 +45,9 @@ function getAlertBadge(level: AlertLevel) {
 
 export default function CommandCenterPage() {
   // ─── Sentinel Core Engine ───
-  const demoData = useMemo(() => generateSentinelDemoData(), []);
-  const sentinel = useMemo(() => runSentinelCore(), []);
+  const { sentinel, data, source } = useSentinelCore();
   const { marketRadar, signals, alerts, risk, causalityReports } = sentinel;
-  const account = demoData.account;
+  const account = data.account;
 
   // ─── Local Portfolio Sync ───
   const { snapshot, hasLocalPortfolio } = useLocalSentinelAccount();
@@ -154,7 +150,7 @@ export default function CommandCenterPage() {
       },
       {
         label: "Exposure",
-        value: Math.round((account.marketValue / account.totalAsset) * 100),
+        value: Math.round((account.marketValue / account.totalAssets) * 100),
         color: "var(--up)",
         description: "持仓暴露",
       },
@@ -229,7 +225,7 @@ export default function CommandCenterPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               A-Share Sentinel X
-              <DemoDataBadge />
+              <SentinelDataBadge source={source} />
             </h1>
             <p className="text-sm text-[var(--text-muted)] mt-1">
               AI 原生模拟实盘指挥舱
@@ -263,7 +259,7 @@ export default function CommandCenterPage() {
             >
               <MetricCard
                 label="总资产"
-                value={formatMoney(account.totalAsset)}
+                value={formatMoney(account.totalAssets)}
                 delay={0}
               />
               <MetricCard
