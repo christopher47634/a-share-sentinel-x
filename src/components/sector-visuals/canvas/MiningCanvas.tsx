@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
+import { useCanvasLoop } from "./useCanvasLoop";
 
 interface MiningCanvasProps {
   width: number;
@@ -29,9 +30,6 @@ export default function MiningCanvas({
   hoverIntensity = 0,
 }: MiningCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<number>(0);
-  const isVisibleRef = useRef(true);
-  const timeRef = useRef(0);
   const hoveredRef = useRef(false);
   const animEnabledRef = useRef(animationsEnabled);
   const hoverIntensityRef = useRef(0);
@@ -190,62 +188,10 @@ export default function MiningCanvas({
     []
   );
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || width <= 0 || height <= 0) return;
-
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const reducedMotion = mq.matches;
-
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-
-    const ctx = canvas.getContext("2d");
-    if (ctx) ctx.scale(dpr, dpr);
-
-    if (reducedMotion || !animationsEnabled) {
-      draw(width, height, 0, false, false);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        isVisibleRef.current = entries[0]?.isIntersecting ?? false;
-      },
-      { threshold: 0.01 }
-    );
-    observer.observe(canvas);
-
-    let lastTimestamp = 0;
-    const animate = (timestamp: number) => {
-      if (!lastTimestamp) lastTimestamp = timestamp;
-      const delta = (timestamp - lastTimestamp) / 1000;
-      lastTimestamp = timestamp;
-
-      if (isVisibleRef.current) {
-        timeRef.current += delta;
-        draw(
-          width,
-          height,
-          timeRef.current,
-          hoveredRef.current,
-          animEnabledRef.current
-        );
-      }
-
-      animFrameRef.current = requestAnimationFrame(animate);
-    };
-
-    animFrameRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      cancelAnimationFrame(animFrameRef.current);
-      observer.disconnect();
-    };
-  }, [width, height, animationsEnabled, draw]);
+  useCanvasLoop(canvasRef, width, height, animationsEnabled, {
+    frame: (t) => draw(width, height, t, hoveredRef.current, animEnabledRef.current),
+    still: () => draw(width, height, 0, false, false),
+  });
 
   return (
     <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" />
