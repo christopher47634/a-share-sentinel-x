@@ -9,6 +9,7 @@ import {
   STORAGE_KEYS,
 } from './account-storage'
 import { syncLocalLedgerSnapshot } from './local-ledger'
+import { sellableFrom } from './trading-calendar'
 import { getAccountSummary, toCents, fromCents } from '@/mock/account'
 import { createOrder, updateOrderStatus } from '@/mock/orders'
 import type { AccountTransaction, AccountSummary } from '@/types/account'
@@ -150,7 +151,9 @@ export function executeBuy(params: BuyParams): TradeResult {
   if (existing) {
     const oldCostCents = Math.round(existing.avgCost * existing.quantity * 100)
     const newQuantity = existing.quantity + quantity
-    const todayBought = (existing.lastBuyDate === today ? existing.todayBought ?? 0 : 0) + quantity
+    // 之前买入、还没到可卖日的部分继续锁定（例如周五买、周六又买，两批都锁到周一）
+    const stillLocked = existing.lastBuyDate !== undefined && today < sellableFrom(existing.lastBuyDate) ? existing.todayBought ?? 0 : 0
+    const todayBought = stillLocked + quantity
     existing.avgCost = (oldCostCents + costCents) / 100 / newQuantity
     existing.quantity = newQuantity
     existing.todayBought = todayBought

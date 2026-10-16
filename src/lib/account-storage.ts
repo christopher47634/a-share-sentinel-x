@@ -5,6 +5,7 @@ import { mockPositions } from '@/mock/positions';
 import { mockTransactions } from '@/mock/accountTransactions';
 import { mockPortfolioHistory } from '@/mock/portfolioHistory';
 import { shanghaiDate } from './time';
+import { sellableFrom } from './trading-calendar';
 
 export { shanghaiDate };
 
@@ -89,13 +90,14 @@ export function saveAccount(account: AccountSummary): boolean {
 
 // ─── Positions ─────────────────────────────────────────────────────
 /**
- * T+1: shares bought on an earlier Shanghai calendar date become sellable.
+ * T+1: shares become sellable from the first trading day after the buy date (trading-calendar).
  * Positions carry `todayBought` + `lastBuyDate`; availableQuantity is derived here.
- * (Next calendar day is used as "next trading day"; no exchange calendar is bundled.)
  */
 export function applyT1(positions: Position[], today: string = shanghaiDate()): Position[] {
   return positions.map((p) => {
-    const todayBought = p.lastBuyDate === today ? Math.min(p.todayBought ?? 0, p.quantity) : 0;
+    // 锁定到买入日之后的第一个交易日（周五买入锁到周一，节前买入锁到节后），不是简单的「隔一个自然日」
+    const locked = p.lastBuyDate !== undefined && today < sellableFrom(p.lastBuyDate);
+    const todayBought = locked ? Math.min(p.todayBought ?? 0, p.quantity) : 0;
     return { ...p, todayBought, availableQuantity: Math.max(0, p.quantity - todayBought) };
   });
 }

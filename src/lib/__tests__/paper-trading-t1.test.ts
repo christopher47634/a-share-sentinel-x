@@ -39,6 +39,26 @@ describe("模拟盘 T+1", () => {
     expect(sell(100).success).toBe(true);
   });
 
+  it("周五买入后，周末仍不能卖（按交易日锁定，不是隔一个自然日）", () => {
+    vi.setSystemTime(shanghaiMorning("2026-10-09"));
+    expect(buy(100).success).toBe(true);
+    vi.setSystemTime(shanghaiMorning("2026-10-10"));
+    expect(getAvailableSellQuantity(MOUTAI.stockCode)).toBe(0);
+    const weekend = sell(100);
+    expect(weekend.success).toBe(false);
+    expect(weekend.error).toContain("T+1");
+  });
+
+  it("周五、周六连续买入，两批都锁到周一", () => {
+    vi.setSystemTime(shanghaiMorning("2026-10-09"));
+    expect(buy(100).success).toBe(true);
+    vi.setSystemTime(shanghaiMorning("2026-10-10"));
+    expect(buy(200).success).toBe(true);
+    expect(getAvailableSellQuantity(MOUTAI.stockCode)).toBe(0);
+    vi.setSystemTime(shanghaiMorning("2026-10-12"));
+    expect(getAvailableSellQuantity(MOUTAI.stockCode)).toBe(300);
+  });
+
   it("节前买入，长假后第一个交易日可卖", () => {
     vi.setSystemTime(shanghaiMorning("2026-09-30"));
     buy(100);
