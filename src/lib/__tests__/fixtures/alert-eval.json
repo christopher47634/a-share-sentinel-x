@@ -1,0 +1,205 @@
+{
+  "$comment": "信号→提醒→结果评测用例。行情是构造的演示样本，不是真实历史数据；outcome 是假设的下一交易日涨跌幅，用来检验评分口径。改动信号规则导致 expect 变化时，确认新结果合理后再更新这里和 baseline。",
+  "baseline": {
+    "cases": 8,
+    "regressionPass": 8,
+    "riskAlerts": 3,
+    "hits": 2,
+    "falseAlarms": 1,
+    "missed": 1,
+    "riskPrecision": 0.667,
+    "riskRecall": 0.667
+  },
+  "cases": [
+    {
+      "id": "R-ALERT-001",
+      "title": "放量突破 20 日高点，所属板块同步走强",
+      "stock": {
+        "code": "300308",
+        "name": "中际旭创",
+        "price": 160,
+        "changePct": 6.2,
+        "volumeRatio": 3.1,
+        "high20": 158,
+        "sector": "光模块"
+      },
+      "sectors": [
+        {
+          "name": "光模块",
+          "changePct": 3.4,
+          "upCount": 40,
+          "downCount": 5,
+          "heatScore": 90
+        }
+      ],
+      "expect": {
+        "signals": [
+          "放量异动",
+          "板块共振",
+          "涨幅超过用户阈值",
+          "突破近20日高点"
+        ],
+        "level": "High"
+      },
+      "outcome": {
+        "nextDayChangePct": 2.1
+      }
+    },
+    {
+      "id": "R-ALERT-002",
+      "title": "大涨后涨速转负，冲高回落",
+      "stock": {
+        "code": "688256",
+        "name": "寒武纪",
+        "price": 600,
+        "changePct": 8.1,
+        "speed": -0.6
+      },
+      "expect": {
+        "signals": [
+          "冲高回落风险",
+          "涨幅超过用户阈值",
+          "涨速转负"
+        ],
+        "level": "Risk"
+      },
+      "outcome": {
+        "nextDayChangePct": -4.2
+      }
+    },
+    {
+      "id": "R-ALERT-003",
+      "title": "持仓股放量下跌",
+      "stock": {
+        "code": "002594",
+        "name": "比亚迪",
+        "price": 240,
+        "changePct": -4.3,
+        "volumeRatio": 2.6
+      },
+      "position": {
+        "costPrice": 250,
+        "positionRatio": 0.15
+      },
+      "expect": {
+        "signals": [
+          "持仓股放量下跌",
+          "放量异动",
+          "跌幅超过用户阈值"
+        ],
+        "level": "Risk"
+      },
+      "outcome": {
+        "nextDayChangePct": -2.0
+      }
+    },
+    {
+      "id": "R-ALERT-004",
+      "title": "触及止损观察线后反弹（误报样本）",
+      "stock": {
+        "code": "600036",
+        "name": "招商银行",
+        "price": 39.5,
+        "changePct": -1.8
+      },
+      "position": {
+        "costPrice": 44,
+        "positionRatio": 0.1,
+        "stopLossPrice": 40
+      },
+      "expect": {
+        "signals": [
+          "接近或跌破止损观察线"
+        ],
+        "level": "Risk"
+      },
+      "outcome": {
+        "nextDayChangePct": 1.5
+      }
+    },
+    {
+      "id": "R-ALERT-005",
+      "title": "平静行情，不应提醒",
+      "stock": {
+        "code": "601318",
+        "name": "中国平安",
+        "price": 52,
+        "changePct": 0.4,
+        "volumeRatio": 1.0
+      },
+      "expect": {
+        "signals": [],
+        "level": null
+      },
+      "outcome": {
+        "nextDayChangePct": 0.3
+      }
+    },
+    {
+      "id": "R-ALERT-006",
+      "title": "盘中无异动，次日大跌（漏报样本）",
+      "stock": {
+        "code": "000858",
+        "name": "五粮液",
+        "price": 130,
+        "changePct": -1.1,
+        "volumeRatio": 1.2
+      },
+      "expect": {
+        "signals": [],
+        "level": null
+      },
+      "outcome": {
+        "nextDayChangePct": -6.0
+      }
+    },
+    {
+      "id": "R-ALERT-007",
+      "title": "原计划不追高，股价大幅拉升",
+      "stock": {
+        "code": "300750",
+        "name": "宁德时代",
+        "price": 260,
+        "changePct": 6.0
+      },
+      "position": {
+        "costPrice": 230,
+        "positionRatio": 0.12,
+        "plan": "不追高，等待回调再加仓"
+      },
+      "expect": {
+        "signals": [
+          "交易计划偏离：原计划不追高但股价大幅拉升",
+          "涨幅超过用户阈值"
+        ],
+        "level": "Low"
+      },
+      "outcome": {
+        "nextDayChangePct": -1.0
+      }
+    },
+    {
+      "id": "R-ALERT-008",
+      "title": "单股仓位过高",
+      "stock": {
+        "code": "600519",
+        "name": "贵州茅台",
+        "price": 1500,
+        "changePct": 0.8
+      },
+      "position": {
+        "costPrice": 1450,
+        "positionRatio": 0.35
+      },
+      "expect": {
+        "signals": [
+          "单股仓位超过30%"
+        ],
+        "level": "Low"
+      },
+      "outcome": {
+        "nextDayChangePct": -0.5
+      }
+    }
+  ]
+}
