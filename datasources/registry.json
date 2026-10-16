@@ -1,0 +1,97 @@
+{
+  "$comment": "数据源注册表。代码里新增或更换外部数据源时，同步改这里并运行 npm run datasources:catalog；src/lib/__tests__/datasource-registry.test.ts 会核对代码与注册表是否一致。",
+  "sources": [
+    {
+      "id": "eastmoney-quote",
+      "name": "东方财富实时行情",
+      "kind": "live",
+      "role": "primary",
+      "marketSource": "eastmoney",
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={fields}",
+      "module": "src/lib/market-provider.ts",
+      "usedBy": ["fetchLiveQuote", "getMarketSnapshot", "getMarketIndexSnapshot", "getMarketStockDetail"],
+      "fallback": "tencent-quote",
+      "timeoutMs": 3500,
+      "health": {
+        "url": "https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f43,f57,f58",
+        "expectJsonPath": "data.f57",
+        "referer": "https://quote.eastmoney.com/"
+      },
+      "notes": "免费公开接口，无 SLA；部分网络（如 WSL）会被掐断 HTTPS。停牌或盘前字段缺失时由 mock 补位，整条行情标为 mock。"
+    },
+    {
+      "id": "eastmoney-kline",
+      "name": "东方财富历史 K 线",
+      "kind": "live",
+      "role": "primary",
+      "marketSource": "eastmoney",
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&klt={klt}&fqt=1&beg={begin}&end={end}",
+      "module": "src/lib/market-provider.ts",
+      "usedBy": ["fetchLiveCandles", "getMarketStockDetail"],
+      "fallback": "mock-market",
+      "timeoutMs": 3500,
+      "health": {
+        "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&lmt=5&end=20500101&fields1=f1,f2,f3&fields2=f51,f52,f53",
+        "expectJsonPath": "data.klines",
+        "referer": "https://quote.eastmoney.com/"
+      },
+      "notes": "前复权日线/周线/月线及分钟线。实时 K 线根数不足时才回退 mock。"
+    },
+    {
+      "id": "tencent-quote",
+      "name": "腾讯行情",
+      "kind": "live",
+      "role": "fallback",
+      "marketSource": "tencent",
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://qt.gtimg.cn/q={symbol}",
+      "module": "src/lib/market-provider.ts",
+      "usedBy": ["fetchLiveQuote"],
+      "fallback": "mock-market",
+      "timeoutMs": 5000,
+      "health": {
+        "url": "https://qt.gtimg.cn/q=sh600519",
+        "expectText": "v_sh600519=",
+        "referer": "https://gu.qq.com/"
+      },
+      "notes": "东财失败时的备用实时行情，返回 GBK 文本。"
+    },
+    {
+      "id": "mock-market",
+      "name": "本地演示行情",
+      "kind": "mock",
+      "role": "fallback",
+      "marketSource": "mock",
+      "isRealData": false,
+      "auth": "none",
+      "endpoint": "src/mock/",
+      "module": "src/mock/market.ts",
+      "usedBy": ["marketIndices"],
+      "fallback": null,
+      "timeoutMs": null,
+      "health": null,
+      "notes": "假数据：实时源全部失败时补位，界面以 Mock fallback 标注。板块、新闻事件、AI 页面（市场雷达、盯盘、解盘、风险护盾、复盘）的演示样本也来自这里或 sentinel-core 的 generateSentinelDemoData，不是真实行情。"
+    },
+    {
+      "id": "openai-responses",
+      "name": "OpenAI Responses API",
+      "kind": "llm",
+      "role": "optional",
+      "marketSource": null,
+      "isRealData": false,
+      "auth": "env:OPENAI_API_KEY",
+      "endpoint": "https://api.openai.com/v1/responses",
+      "module": "src/app/api/ai/chat/route.ts",
+      "usedBy": ["POST"],
+      "fallback": "local-rule-engine",
+      "timeoutMs": 30000,
+      "health": null,
+      "notes": "仅 AI 研究助手使用。未配置密钥时由本地规则引擎生成回答；输出经 complianceEngine 过滤。健康检查需要密钥，不在 CI 里跑。"
+    }
+  ]
+}

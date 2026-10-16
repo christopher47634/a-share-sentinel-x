@@ -10,7 +10,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "datasources:catalog": "node scripts/datasources.mjs catalog",
+    "datasources:check": "node scripts/datasources.mjs catalog --check",
+    "datasources:health": "node scripts/datasources.mjs health"
   },
   "dependencies": {
     "clsx": "^2.1.1",
