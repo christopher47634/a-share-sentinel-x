@@ -227,11 +227,11 @@ A 股投资者经常面对以下问题：
 
 ## 9. 数据源说明
 
-本 MVP 当前使用模拟 A 股行情与模拟账户数据完成演示。
+- **实时行情**：东方财富为主源，腾讯行情为备用；两者都失败或字段缺失时用本地 mock 补位，界面标注 `Mock fallback`。
+- **演示数据**：板块、新闻事件、AI 页面（市场雷达、盯盘、解盘、风险护盾、复盘）的样本和模拟账户初始数据是构造的，页面带「演示数据」标注。
+- **AI 问答**：配置 `OPENAI_API_KEY` 时调用 OpenAI，否则由本地规则引擎生成。
 
-设计原因：笔试题允许使用模拟数据、评审无需配置 API Key、非交易时间也能看到完整功能、用户规则/提醒/解盘/风险/复盘都能稳定触发。
-
-后续可扩展：AkShare、Tushare、交易所行情快照、自选股实时行情、公告/新闻/研报数据源。
+全部数据源登记在 `datasources/registry.json`，清单与健康检查见 [docs/DATASOURCES.md](docs/DATASOURCES.md)。
 
 ---
 
@@ -245,9 +245,13 @@ npm run dev -- -p 3458
 访问 `http://localhost:3458`
 
 ```bash
+npm run lint       # ESLint
 npx tsc --noEmit   # 类型检查
+npm test           # 单元测试、评测与架构边界检查
 npm run build      # 构建
 ```
+
+架构与依赖方向见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，安全说明见 [SECURITY.md](SECURITY.md)，给 AI 编码助手的约定见 [AGENTS.md](AGENTS.md)。
 
 ---
 
