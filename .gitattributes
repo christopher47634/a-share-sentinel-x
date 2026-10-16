@@ -1,0 +1,2 @@
+# 带 shebang 的 Node 脚本必须是 LF：Windows 上 core.autocrlf 转成 CRLF 后，测试 import 它会报语法错误
+*.mjs text eol=lf

@@ -275,7 +275,7 @@ export default function DemoGuide() {
     }
 
     cleanupRef.current = cleanup;
-  }, [demoMode, currentStep, routeMatches, nextStep, router]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [demoMode, currentStep, routeMatches, nextStep, router]);  
 
   // Run highlight on step change and route change
   useEffect(() => {

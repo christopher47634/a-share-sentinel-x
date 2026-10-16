@@ -422,7 +422,7 @@ export default function SectorPageClient() {
 }
 
 /* Sector Trend Area Chart using ECharts */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 function SectorTrendChart({
   data,
   color,

@@ -9,7 +9,7 @@
     "verify": "tsc --noEmit && next build",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "vitest run",
     "datasources:catalog": "node scripts/datasources.mjs catalog",
     "datasources:check": "node scripts/datasources.mjs catalog --check",
@@ -28,10 +28,11 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "eslint": "^8",
+    "eslint": "^9.39.5",
     "eslint-config-next": "^15.5.16",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
