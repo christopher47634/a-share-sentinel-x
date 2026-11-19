@@ -11,15 +11,35 @@
       "auth": "none",
       "endpoint": "https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={fields}",
       "module": "src/lib/market-provider.ts",
-      "usedBy": ["fetchLiveQuote", "getMarketSnapshot", "getMarketIndexSnapshot", "getMarketStockDetail"],
+      "usedBy": ["fetchLiveQuote", "getMarketStockDetail"],
       "fallback": "tencent-quote",
       "timeoutMs": 3500,
       "health": {
-        "url": "https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f43,f57,f58",
+        "url": "https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f43,f50,f57,f58",
         "expectJsonPath": "data.f57",
         "referer": "https://quote.eastmoney.com/"
       },
-      "notes": "免费公开接口，无 SLA；部分网络（如 WSL）会被掐断 HTTPS。停牌或盘前字段缺失时由 mock 补位，整条行情标为 mock。"
+      "notes": "免费公开接口，无 SLA；单股实时报价含 f50 量比与 f22 涨速。停牌或盘前字段缺失时由 mock 补位，整条行情标为 mock。"
+    },
+    {
+      "id": "eastmoney-batch-quote",
+      "name": "东方财富批量实时行情",
+      "kind": "live",
+      "role": "primary",
+      "marketSource": "eastmoney",
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids={secids}&fields={fields}",
+      "module": "src/lib/market-provider.ts",
+      "usedBy": ["fetchEastmoneyBatchQuotes", "fetchLiveQuotesBatch", "getMarketSnapshot", "getMarketIndexSnapshot"],
+      "fallback": "tencent-quote",
+      "timeoutMs": 3500,
+      "health": {
+        "url": "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=1.600519,0.000001&fields=f2,f10,f11,f12,f13,f22",
+        "expectJsonPath": "data.diff",
+        "referer": "https://quote.eastmoney.com/"
+      },
+      "notes": "一次 HTTP 请求拉取最多 40 只标的实时行情（含 f10 量比、f11 5 分钟涨跌幅、f22 涨速），替代逐股扇出请求。"
     },
     {
       "id": "eastmoney-kline",
@@ -32,14 +52,14 @@
       "endpoint": "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&klt={klt}&fqt=1&beg={begin}&end={end}",
       "module": "src/lib/market-provider.ts",
       "usedBy": ["fetchLiveCandles", "getMarketStockDetail"],
-      "fallback": "mock-market",
+      "fallback": "tencent-kline",
       "timeoutMs": 3500,
       "health": {
         "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&lmt=5&end=20500101&fields1=f1,f2,f3&fields2=f51,f52,f53",
         "expectJsonPath": "data.klines",
         "referer": "https://quote.eastmoney.com/"
       },
-      "notes": "前复权日线/周线/月线及分钟线。实时 K 线根数不足时才回退 mock。"
+      "notes": "前复权日线/周线/月线及分钟线。失败或根数不足时先回退腾讯前复权 K 线，仍失败才回退 mock。"
     },
     {
       "id": "tencent-quote",
@@ -51,7 +71,7 @@
       "auth": "none",
       "endpoint": "https://qt.gtimg.cn/q={symbol}",
       "module": "src/lib/market-provider.ts",
-      "usedBy": ["fetchLiveQuote"],
+      "usedBy": ["fetchLiveQuote", "fetchTencentBatchQuotes", "fetchLiveQuotesBatch"],
       "fallback": "mock-market",
       "timeoutMs": 5000,
       "health": {
@@ -59,7 +79,47 @@
         "expectText": "v_sh600519=",
         "referer": "https://gu.qq.com/"
       },
-      "notes": "东财失败时的备用实时行情，返回 GBK 文本。"
+      "notes": "东财单股/批量失败时的备用实时行情（支持单次多代码逗号拼接批量查询，含第 50 段量比），返回 GBK 文本。"
+    },
+    {
+      "id": "tencent-kline",
+      "name": "腾讯前复权历史与分钟 K 线",
+      "kind": "live",
+      "role": "fallback",
+      "marketSource": "tencent",
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={symbol},{period},,,{count},qfq",
+      "module": "src/lib/market-provider.ts",
+      "usedBy": ["fetchTencentCandles", "fetchLiveCandles", "enrichQuotesWithDailyStats"],
+      "fallback": "mock-market",
+      "timeoutMs": 5000,
+      "health": {
+        "url": "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param=sh600519,day,,,5,qfq",
+        "expectJsonPath": "data.sh600519",
+        "referer": "https://gu.qq.com/"
+      },
+      "notes": "东财 K 线失败时的实时备源，同时用于为 Sentinel 重点标的补充近 20 日高低点与 20 日均量。"
+    },
+    {
+      "id": "eastmoney-announcements",
+      "name": "东方财富沪深公开公告",
+      "kind": "live",
+      "role": "optional",
+      "marketSource": null,
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size={pageSize}&page_index=1&ann_type=A&stock_list={codes}",
+      "module": "src/lib/news-provider.ts",
+      "usedBy": ["fetchStockAnnouncements"],
+      "fallback": null,
+      "timeoutMs": 2500,
+      "health": {
+        "url": "https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=2&page_index=1&ann_type=A&stock_list=600519",
+        "expectJsonPath": "data.list",
+        "referer": "https://quote.eastmoney.com/"
+      },
+      "notes": "单次 HTTP 批量获取多只 A 股近 30 日交易所公开公告，供归因解盘（Causality Lab）与 AI 研究副驾作为可验证事件证据。失败时返回空列表，不回退假新闻。"
     },
     {
       "id": "mock-market",
@@ -78,6 +138,22 @@
       "notes": "假数据：实时源全部失败时补位，界面以 Mock fallback 标注。板块、新闻事件、AI 页面（市场雷达、盯盘、解盘、风险护盾、复盘）的演示样本也来自这里或 sentinel-core 的 generateSentinelDemoData，不是真实行情。"
     },
     {
+      "id": "openai-compatible-llm",
+      "name": "OpenAI-Compatible LLM（默认 DeepSeek）",
+      "kind": "llm",
+      "role": "optional",
+      "marketSource": null,
+      "isRealData": false,
+      "auth": "env:AI_API_KEY",
+      "endpoint": "https://api.deepseek.com/v1/chat/completions",
+      "module": "src/lib/ai-provider.ts",
+      "usedBy": ["resolveAiProvider", "callUpstreamLlm", "streamUpstreamCompatLlm"],
+      "fallback": "local-rule-engine",
+      "timeoutMs": 30000,
+      "health": null,
+      "notes": "AI 研究副驾优先接入方式，可通过 AI_BASE_URL 与 AI_MODEL 切换任意 OpenAI Chat Completions 兼容模型，支持 SSE 流式输出与多轮对话；输出统一经 complianceEngine 过滤。"
+    },
+    {
       "id": "openai-responses",
       "name": "OpenAI Responses API",
       "kind": "llm",
@@ -86,12 +162,12 @@
       "isRealData": false,
       "auth": "env:OPENAI_API_KEY",
       "endpoint": "https://api.openai.com/v1/responses",
-      "module": "src/app/api/ai/chat/route.ts",
-      "usedBy": ["POST"],
+      "module": "src/lib/ai-provider.ts",
+      "usedBy": ["resolveAiProvider", "callUpstreamLlm"],
       "fallback": "local-rule-engine",
       "timeoutMs": 30000,
       "health": null,
-      "notes": "仅 AI 研究助手使用。未配置密钥时由本地规则引擎生成回答；输出经 complianceEngine 过滤。健康检查需要密钥，不在 CI 里跑。"
+      "notes": "未配置 AI_API_KEY 时的备选大模型通道；全部未配置或超时时回退到本地研究引擎，输出经 complianceEngine 过滤。"
     }
   ]
 }

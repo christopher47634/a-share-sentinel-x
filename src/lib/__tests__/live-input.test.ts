@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { aggregateSectors, buildLiveSentinelInput, runSentinelCore, toSentinelAccount } from "@/lib/sentinel-core";
+import {
+  aggregateSectors,
+  buildLiveSentinelInput,
+  mergeActiveAlerts,
+  runSentinelCore,
+  toSentinelAccount,
+} from "@/lib/sentinel-core";
 import type { MarketQuote } from "@/types/market";
-import type { Position } from "@/types/account";
+import type { AccountTransaction, Position } from "@/types/account";
 
 function quote(code: string, changePercent: number, source: MarketQuote["source"] = "tencent"): MarketQuote {
   const prevClose = 10;
@@ -96,5 +102,73 @@ describe("toSentinelAccount", () => {
     expect(account.todayPnl).toBe(500 + 123);
     expect(account.positions.reduce((sum, p) => sum + p.positionRatio, 0)).toBeCloseTo(account.marketValue / account.totalAssets, 10);
     expect(account.totalReturnPct).toBeCloseTo(((921_000 - 1_000_000) / 1_000_000) * 100, 2);
+  });
+
+  it("maps position trading plan, stopLossPrice, targetPrice and today's buy/sell transactions", () => {
+    const pos: Position = {
+      ...position("300750", 1000, 200, 215),
+      plan: "不追高，等待回调再观察",
+      stopLossPrice: 190,
+      targetPrice: 240,
+    };
+    const txns: AccountTransaction[] = [
+      { id: "t1", type: "buy", stockCode: "300750", amount: -200_050, createdAt: "2026-11-19T02:00:00.000Z", relatedOrderId: "o1" },
+      { id: "t2", type: "sell", stockCode: "600519", amount: 150_000, createdAt: "2026-11-19T06:00:00.000Z", relatedOrderId: "o2" },
+      { id: "t3", type: "buy", stockCode: "300750", amount: -100_000, createdAt: "2026-11-18T02:00:00.000Z", relatedOrderId: "o3" },
+      { id: "t4", type: "fee", stockCode: "300750", amount: -5, createdAt: "2026-11-19T02:00:00.000Z", relatedOrderId: "o1" },
+    ];
+    const account = toSentinelAccount({
+      cash: 800_000,
+      positions: [pos],
+      transactions: txns,
+      today: "2026-11-19",
+      sectorNameOf: () => "新能源",
+      priceOf: () => 215,
+    });
+    expect(account.positions[0]).toMatchObject({
+      plan: "不追高，等待回调再观察",
+      stopLossPrice: 190,
+      targetPrice: 240,
+    });
+    expect(account.trades).toHaveLength(2);
+    expect(account.trades?.map((t) => t.side)).toEqual(["BUY", "SELL"]);
+
+    // 实时涨幅 ≥ 5% 时触发计划偏离信号，且盘后复盘统计到 2 笔当日成交
+    const liveQuote: MarketQuote = {
+      ...quote("300750", 7.5),
+      price: 215,
+      prevClose: 200,
+      volumeLots: 500_000,
+      volumeRatio: 3.2,
+      fiveMinChangePct: 2.4,
+      speed: -0.5,
+      high20: 210,
+      low20: 180,
+      avg20Volume: 200_000,
+    };
+    const liveInput = buildLiveSentinelInput({
+      quotes: [liveQuote],
+      indices: [quote("000001", 0.5)],
+      sectorOf: () => "新能源",
+    });
+    const core = runSentinelCore({ ...liveInput, account, newsEvents: [] });
+    const signalNames = core.signals.map((s) => s.signalName);
+    expect(signalNames).toContain("放量异动");
+    expect(signalNames).toContain("突破近20日高点");
+    expect(signalNames).toContain("成交量高于20日均量2倍");
+    expect(signalNames).toContain("快速拉升");
+    expect(signalNames).toContain("冲高回落风险");
+    expect(signalNames).toContain("交易计划偏离：原计划不追高但股价大幅拉升");
+    expect(core.journal.tradeSummary[0]).toContain("2 笔");
+  });
+
+  it("deduplicates repeated alerts within window while keeping active alerts visible", () => {
+    const first = runSentinelCore();
+    const second = runSentinelCore({ previousAlerts: first.alerts, dedupeWindowMinutes: 10 });
+    expect(second.freshAlerts).toEqual([]);
+    expect(second.alerts.length).toBe(first.alerts.length);
+
+    const expired = mergeActiveAlerts(first.alerts, [], 10, Date.now() + 15 * 60 * 1000);
+    expect(expired).toEqual([]);
   });
 });

@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMarketSnapshot, MAX_SNAPSHOT_CODES, normalizeCode } from "@/lib/market-provider";
+import { clientIp, createRateLimiter } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+const limiter = createRateLimiter({ limit: 60, windowMs: 60_000 });
 
 export async function GET(request: NextRequest) {
+  const rate = limiter(clientIp(request.headers));
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } }
+    );
+  }
   const codesParam = request.nextUrl.searchParams.get("codes");
   const codes = codesParam
     ? codesParam

@@ -110,6 +110,44 @@ export function savePositions(positions: Position[]): boolean {
   return setJson(POSITIONS_KEY, positions);
 }
 
+export interface PositionPlanPatch {
+  plan?: string;
+  stopLossPrice?: number;
+  targetPrice?: number;
+}
+
+/**
+ * 更新指定持仓的交易计划、止损观察线和目标观察价，并广播 sentinel:account-updated 让六个 AI 页面即时重算。
+ */
+export function updatePositionPlan(stockCode: string, patch: PositionPlanPatch): boolean {
+  const positions = getPositions();
+  const index = positions.findIndex((p) => p.stockCode === stockCode);
+  if (index < 0) return false;
+
+  const trimmedPlan = patch.plan?.trim();
+  const validStop =
+    typeof patch.stopLossPrice === 'number' && Number.isFinite(patch.stopLossPrice) && patch.stopLossPrice > 0
+      ? Math.round(patch.stopLossPrice * 100) / 100
+      : undefined;
+  const validTarget =
+    typeof patch.targetPrice === 'number' && Number.isFinite(patch.targetPrice) && patch.targetPrice > 0
+      ? Math.round(patch.targetPrice * 100) / 100
+      : undefined;
+
+  positions[index] = {
+    ...positions[index],
+    plan: trimmedPlan ? trimmedPlan.slice(0, 200) : undefined,
+    stopLossPrice: validStop,
+    targetPrice: validTarget,
+  };
+
+  const saved = savePositions(positions);
+  if (saved && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('sentinel:account-updated'));
+  }
+  return saved;
+}
+
 // ─── Transactions ──────────────────────────────────────────────────
 export function getTransactions(): AccountTransaction[] {
   return getJson<AccountTransaction[]>(TRANSACTIONS_KEY, []);

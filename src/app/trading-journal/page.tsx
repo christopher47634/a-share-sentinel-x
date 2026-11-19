@@ -14,22 +14,6 @@ function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
 }
 
-function cleanText(text: string): string {
-  return text
-    .replace(/\u4e70\u5165/g, "模拟开仓")
-    .replace(/\u5356\u51fa/g, "模拟减仓")
-    .replace(/\u6ee1\u4ed3/g, "高仓位")
-    .replace(/\u6e05\u4ed3/g, "降低风险暴露")
-    .replace(/\u5fc5\u6da8/g, "存在走强可能但需验证")
-    .replace(/\u5fc5\u8dcc/g, "存在走弱风险但需验证")
-    .replace(/\u7a33\u8d5a/g, "收益不确定")
-    .replace(/\u4fdd\u8bc1\u6536\u76ca/g, "不保证收益")
-    .replace(/\u5185\u5e55\u6d88\u606f/g, "未经验证信息")
-    .replace(/\u786e\u5b9a\u4e0a\u6da8/g, "可能走强但需验证")
-    .replace(/\u786e\u5b9a\u4e0b\u8dcc/g, "可能走弱但需验证")
-    .replace(/\u76ee\u6807\u4ef7\u627f\u8bfa/g, "观察价位");
-}
-
 function alertTone(level: AlertLevel): string {
   const map: Record<AlertLevel, string> = {
     Low: "border-slate-400/20 bg-slate-400/10 text-slate-200",
@@ -41,8 +25,7 @@ function alertTone(level: AlertLevel): string {
 }
 
 function parseReviewSections(text: string): Array<{ title: string; body: string }> {
-  const normalized = cleanText(text);
-  return normalized
+  return text
     .split(/(?=【)/g)
     .map(chunk => chunk.trim())
     .filter(Boolean)
@@ -71,27 +54,27 @@ function AlertBadge({ level }: { level: AlertLevel }) {
 }
 
 function SummaryList({ items }: { items: string[] }) {
-  return <div className="space-y-2">{items.map(item => <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6 text-slate-300">{cleanText(item)}</div>)}</div>;
+  return <div className="space-y-2">{items.map(item => <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6 text-slate-300">{item}</div>)}</div>;
 }
 
 function PriorityAlertCard({ alert }: { alert: Alert }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><div className="flex flex-wrap items-center gap-2"><AlertBadge level={alert.level} /><span className="text-sm text-slate-400">{alert.code}</span><h3 className="text-base font-semibold text-slate-50">{alert.name}</h3></div><p className="mt-2 text-sm leading-6 text-slate-300">{cleanText(alert.title)}</p></div>
+        <div><div className="flex flex-wrap items-center gap-2"><AlertBadge level={alert.level} /><span className="text-sm text-slate-400">{alert.code}</span><h3 className="text-base font-semibold text-slate-50">{alert.name}</h3></div><p className="mt-2 text-sm leading-6 text-slate-300">{alert.title}</p></div>
         <div className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-sm font-semibold text-cyan-200">Score {alert.score}</div>
       </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <div><div className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">AI Explanation</div><p className="text-sm leading-6 text-slate-300">{cleanText(alert.aiExplanation)}</p></div>
-        <div><div className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">Risk Note</div><p className="text-sm leading-6 text-slate-300">{cleanText(alert.riskNote)}</p></div>
-        <div><div className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">Observation</div><ul className="space-y-1 text-sm text-slate-300">{alert.observationPoints.map(point => <li key={point} className="leading-5">• {cleanText(point)}</li>)}</ul></div>
+        <div><div className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">AI Explanation</div><p className="text-sm leading-6 text-slate-300">{alert.aiExplanation}</p></div>
+        <div><div className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">Risk Note</div><p className="text-sm leading-6 text-slate-300">{alert.riskNote}</p></div>
+        <div><div className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">Observation</div><ul className="space-y-1 text-sm text-slate-300">{alert.observationPoints.map(point => <li key={point} className="leading-5">• {point}</li>)}</ul></div>
       </div>
     </div>
   );
 }
 
 function ReviewSectionCard({ title, body }: { title: string; body: string }) {
-  return <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><div className="mb-2 text-sm font-semibold text-cyan-200">{title}</div><p className="text-sm leading-7 text-slate-300">{cleanText(body)}</p></div>;
+  return <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><div className="mb-2 text-sm font-semibold text-cyan-200">{title}</div><p className="text-sm leading-7 text-slate-300">{body}</p></div>;
 }
 
 export default function TradingJournalPage() {
@@ -145,7 +128,7 @@ export default function TradingJournalPage() {
 
         <Card>
           <SectionTitle eyebrow="Alert Review" title="今日提醒复盘" description="重点查看 High / Risk 级别提醒、持仓相关提醒和计划偏离提醒。" />
-          <div className="mb-5 grid gap-4 md:grid-cols-4">{journal.alertSummary.map(item => <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">{cleanText(item)}</div>)}</div>
+          <div className="mb-5 grid gap-4 md:grid-cols-4">{journal.alertSummary.map(item => <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">{item}</div>)}</div>
           <div className="space-y-4">{journal.highPriorityAlerts.length > 0 ? journal.highPriorityAlerts.map(alert => <PriorityAlertCard key={alert.id} alert={alert} />) : <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-sm text-slate-400">今日暂无 High / Risk 级别提醒。</div>}</div>
         </Card>
 

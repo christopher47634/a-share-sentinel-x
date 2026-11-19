@@ -5,7 +5,10 @@ import {
   isTradingDay,
   nextTradingDay,
   previousTradingDay,
+  recommendedPollIntervalMs,
+  safeTradingSession,
   sellableFrom,
+  sessionLabel,
   tradingSession,
 } from "@/lib/trading-calendar";
 
@@ -31,7 +34,15 @@ describe("交易日历：交易日判定", () => {
 
   it("没有休市数据的年份直接报错，不按周末猜", () => {
     expect(() => isTradingDay("2031-03-03")).toThrow(/2031/);
-    expect(calendarYears()).toContain(2026);
+    expect(calendarYears()).toEqual(expect.arrayContaining([2026, 2027]));
+  });
+
+  it("2027 跨年元旦与春节休市判定准确", () => {
+    expect(isTradingDay("2026-12-31")).toBe(true);
+    expect(isTradingDay("2027-01-01")).toBe(false); // 元旦周五
+    expect(isTradingDay("2027-01-04")).toBe(true);  // 2027 首个交易日
+    expect(sellableFrom("2026-12-31")).toBe("2027-01-04");
+    expect(nextTradingDay("2027-02-04")).toBe("2027-02-15"); // 跨 2027 春节
   });
 
   it("拒绝格式错误和不存在的日期", () => {
@@ -82,5 +93,16 @@ describe("交易日历：交易时段（上海时间）", () => {
     expect(tradingSession(at("2026-10-05T02:00:00Z"))).toBe("closed");
     expect(isMarketOpen(at("2026-10-05T02:00:00Z"))).toBe(false);
     expect(isMarketOpen(at("2026-10-15T02:00:00Z"))).toBe(true);
+  });
+
+  it("safeTradingSession 在缺失年份时降级不抛错，轮询间隔按时段自适应", () => {
+    // 2031-03-03 周一 10:00 上海时间（UTC 02:00）
+    expect(safeTradingSession(at("2031-03-03T02:00:00Z"))).toEqual({ session: "morning", calendarAvailable: false });
+    expect(safeTradingSession(at("2026-10-15T02:00:00Z"))).toEqual({ session: "morning", calendarAvailable: true });
+    expect(sessionLabel("morning")).toBe("上午盘中");
+    expect(sessionLabel("closed")).toBe("已收盘");
+    expect(recommendedPollIntervalMs(at("2026-10-15T02:00:00Z"), 60_000)).toBe(60_000);
+    expect(recommendedPollIntervalMs(at("2026-10-15T04:00:00Z"), 60_000)).toBe(180_000);
+    expect(recommendedPollIntervalMs(at("2026-10-15T08:00:00Z"), 60_000)).toBe(600_000);
   });
 });

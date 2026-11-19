@@ -26,6 +26,10 @@ export interface Position {
   todayPnL: number           // (currentPrice - openPrice) × quantity
   positionRatio: number      // marketValue / totalAssets
   riskLevel: 'low' | 'medium' | 'high'
+  /** 用户自定义的交易计划、止损观察线与目标观察价（接入 Sentinel 盯盘与风险护盾） */
+  plan?: string
+  stopLossPrice?: number
+  targetPrice?: number
 }
 
 export interface PortfolioHistory {

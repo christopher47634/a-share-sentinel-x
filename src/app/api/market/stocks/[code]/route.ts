@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMarketStockDetail, normalizeCode } from "@/lib/market-provider";
+import { clientIp, createRateLimiter } from "@/lib/rate-limit";
 import type { MarketTimeframe } from "@/types/market";
 
 export const dynamic = "force-dynamic";
 const VALID_TIMEFRAMES: MarketTimeframe[] = ["minute", "day", "week", "month"];
+const limiter = createRateLimiter({ limit: 60, windowMs: 60_000 });
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
+  const rate = limiter(clientIp(request.headers));
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } }
+    );
+  }
   const { code } = await params;
   if (!normalizeCode(code)) {
     return NextResponse.json({ error: "invalid_code" }, { status: 400 });

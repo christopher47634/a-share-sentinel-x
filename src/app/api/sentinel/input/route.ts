@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getMarketIndexSnapshot, getMarketSnapshot, MAX_SNAPSHOT_CODES, normalizeCode } from "@/lib/market-provider";
+import {
+  enrichQuotesWithDailyStats,
+  getMarketIndexSnapshot,
+  getMarketSnapshot,
+  MAX_SNAPSHOT_CODES,
+  normalizeCode,
+} from "@/lib/market-provider";
+import { fetchStockAnnouncements } from "@/lib/news-provider";
 import { buildLiveSentinelInput } from "@/lib/sentinel/live-input";
+import { clientIp, createRateLimiter } from "@/lib/rate-limit";
 import { stocks as universe } from "@/mock/stocks";
 import { getSectorById } from "@/mock/sectors";
 
@@ -8,6 +16,8 @@ export const dynamic = "force-dynamic";
 
 /** 持仓代码最多带几只；其余名额给观察样本 */
 const MAX_HELD = 8;
+/** 行情聚合接口限流：单 IP 每分钟最多 60 次，保护上游免费行情与公告接口 */
+const limiter = createRateLimiter({ limit: 60, windowMs: 60_000 });
 
 const sectorByCode = new Map(universe.map((s) => [s.code, getSectorById(s.sectorId)?.name]));
 
@@ -30,6 +40,14 @@ const SAMPLE = sampleUniverse(3);
  * 板块由样本成分股汇总，再加主要指数。只有真正来自上游的报价会进入结果，mock 补位一律剔除。
  */
 export async function GET(request: NextRequest) {
+  const rate = limiter(clientIp(request.headers));
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } }
+    );
+  }
+
   const heldParam = request.nextUrl.searchParams.get("held");
   const held = heldParam ? heldParam.split(",").map((c) => c.trim()).filter(Boolean) : [];
   if (held.length > MAX_HELD || held.some((c) => !normalizeCode(c))) {
@@ -39,10 +57,31 @@ export async function GET(request: NextRequest) {
   const heldCodes = held.map((c) => normalizeCode(c)!.code);
   const codes = [...new Set([...heldCodes, ...SAMPLE])].slice(0, MAX_SNAPSHOT_CODES);
   const [snapshot, indexSnapshot] = await Promise.all([getMarketSnapshot(codes), getMarketIndexSnapshot()]);
+  const topMoverCodes = snapshot.quotes
+    .filter((q) => q.source !== "mock")
+    .slice()
+    .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+    .slice(0, 6)
+    .map((q) => q.code);
+  const focusCodes = [...new Set([...heldCodes, ...topMoverCodes])].slice(0, 12);
+
+  const [enrichedQuotes, announcements] = await Promise.all([
+    enrichQuotesWithDailyStats(snapshot.quotes, {
+      priorityCodes: heldCodes,
+      maxEnrich: 12,
+      budgetMs: 2000,
+    }),
+    fetchStockAnnouncements(focusCodes, {
+      pageSize: 15,
+      maxAgeDays: 30,
+      sectorOf: (code) => sectorByCode.get(code) ?? undefined,
+    }),
+  ]);
   const input = buildLiveSentinelInput({
-    quotes: snapshot.quotes,
+    quotes: enrichedQuotes,
     indices: indexSnapshot.indices,
     sectorOf: (code) => sectorByCode.get(code) ?? undefined,
+    newsEvents: announcements,
   });
 
   return NextResponse.json(
@@ -50,6 +89,7 @@ export async function GET(request: NextRequest) {
       input,
       sampleSize: codes.length,
       liveCount: input.stocks.length,
+      announcementsCount: announcements.length,
       source: snapshot.source,
       sourceLabel: snapshot.sourceLabel,
       updatedAt: snapshot.updatedAt,

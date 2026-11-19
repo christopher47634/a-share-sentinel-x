@@ -7,10 +7,10 @@ import GlassCard from "@/components/common/GlassCard";
 import SentinelPulse from "@/components/ai/SentinelPulse";
 import LiveIntelligenceFeed from "@/components/ai/LiveIntelligenceFeed";
 import AgentStatusStrip from "@/components/ai/AgentStatusStrip";
-import { getAgentStates } from "@/lib/agent-orchestrator";
+import { buildLiveAgentStates } from "@/lib/agent-orchestrator";
 import { shanghaiDate } from "@/lib/time";
 import type { RiskLevel, AlertLevel } from "@/lib/sentinel-core";
-import type { IntelligenceEvent, SentinelDimension, AgentStatus } from "@/types/agent";
+import type { IntelligenceEvent, SentinelDimension } from "@/types/agent";
 import { motion } from "framer-motion";
 import { useLocalSentinelAccount } from "@/hooks/use-local-sentinel-account";
 import SentinelDataBadge from "@/components/common/SentinelDataBadge";
@@ -46,7 +46,7 @@ function getAlertBadge(level: AlertLevel) {
 export default function CommandCenterPage() {
   // ─── Sentinel Core Engine ───
   const { sentinel, data, source } = useSentinelCore();
-  const { marketRadar, signals, alerts, risk, causalityReports } = sentinel;
+  const { marketRadar, signals, alerts, risk, causalityReports, journal } = sentinel;
   const account = data.account;
 
   // ─── Local Portfolio Sync ───
@@ -139,8 +139,32 @@ export default function CommandCenterPage() {
     ];
   }, [now, marketRadar, signals, alerts, risk, causalityReports, riskHighCount]);
 
+  // ─── Agent States (real telemetry from engine) ───
+  const agentStates = useMemo(
+    () =>
+      buildLiveAgentStates({
+        mode: source.mode,
+        sourceLabel: source.sourceLabel,
+        liveCount: source.liveCount,
+        sampleSize: source.sampleSize,
+        updatedAt: source.updatedAt,
+        account,
+        marketRadar,
+        signals,
+        alerts,
+        risk,
+        causalityReports,
+        journal,
+        newsEventsCount: data.newsEvents?.length ?? 0,
+        now,
+      }),
+    [source, account, marketRadar, signals, alerts, risk, causalityReports, journal, data.newsEvents, now]
+  );
+
   // ─── Sentinel Pulse Dimensions ───
   const pulseDimensions = useMemo((): SentinelDimension[] => {
+    const activeAgents = agentStates.filter((a) => a.status === "success").length;
+    const activityPct = agentStates.length > 0 ? Math.round((activeAgents / agentStates.length) * 100) : 0;
     return [
       {
         label: "Market Heat",
@@ -150,7 +174,7 @@ export default function CommandCenterPage() {
       },
       {
         label: "Exposure",
-        value: Math.round((account.marketValue / account.totalAssets) * 100),
+        value: account.totalAssets > 0 ? Math.round((account.marketValue / account.totalAssets) * 100) : 0,
         color: "var(--up)",
         description: "持仓暴露",
       },
@@ -168,51 +192,12 @@ export default function CommandCenterPage() {
       },
       {
         label: "Activity",
-        value: 85,
+        value: activityPct,
         color: "var(--ai-cyan)",
         description: "Agent 活跃度",
       },
     ];
-  }, [marketRadar, account, signals, risk]);
-
-  // ─── Agent States (updated from engine) ───
-  const agentStates = useMemo(() => {
-    const base = getAgentStates();
-    return base.map((a) => {
-      if (a.role === "market")
-        return {
-          ...a,
-          status: "success" as AgentStatus,
-          outputSummary: `市场温度 ${marketRadar.marketTemperature}，${marketRadar.marketRegime}`,
-        };
-      if (a.role === "watch")
-        return {
-          ...a,
-          status: signals.length > 0 ? ("success" as AgentStatus) : ("idle" as AgentStatus),
-          outputSummary: `检测到 ${signals.length} 个盯盘信号`,
-        };
-      if (a.role === "signal")
-        return {
-          ...a,
-          status: signals.length > 0 ? ("success" as AgentStatus) : ("idle" as AgentStatus),
-          outputSummary: `生成 ${signals.length} 个信号，${alerts.length} 条提醒`,
-        };
-      if (a.role === "risk")
-        return {
-          ...a,
-          status: "success" as AgentStatus,
-          outputSummary: `风险等级 ${risk.overallRiskLevel}，评分 ${risk.riskScore}`,
-        };
-      if (a.role === "explain")
-        return {
-          ...a,
-          status:
-            causalityReports.length > 0 ? ("success" as AgentStatus) : ("idle" as AgentStatus),
-          outputSummary: `已生成 ${causalityReports.length} 条归因报告`,
-        };
-      return a;
-    });
-  }, [marketRadar, signals, alerts, risk, causalityReports]);
+  }, [marketRadar, account, signals, risk, agentStates]);
 
   return (
     <DesktopShell>
