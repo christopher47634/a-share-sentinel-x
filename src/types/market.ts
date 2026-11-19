@@ -15,6 +15,18 @@ export interface MarketQuote {
   turnoverValue?: number;
   /** 成交量（手）。实时行情才有 */
   volumeLots?: number;
+  /** 量比。实时行情才有（东财 f50/f10 或腾讯第 50 段） */
+  volumeRatio?: number;
+  /** 涨速（%/分钟）。东财实时行情提供 */
+  speed?: number;
+  /** 5 分钟涨跌幅（%）。东财批量行情提供 */
+  fiveMinChangePct?: number;
+  /** 近 20 日最高价（由历史日 K 派生，供信号引擎使用） */
+  high20?: number;
+  /** 近 20 日最低价（由历史日 K 派生，供信号引擎使用） */
+  low20?: number;
+  /** 近 20 日均量（手，由历史日 K 派生，供信号引擎使用） */
+  avg20Volume?: number;
   pe: number;
   high: number;
   low: number;

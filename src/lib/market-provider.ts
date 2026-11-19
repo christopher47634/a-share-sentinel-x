@@ -3,6 +3,7 @@ import { getStockByCode, stocks } from "@/mock/stocks";
 import { marketIndices } from "@/mock/market";
 import { buildMarketAnalysis } from "@/lib/market-indicators";
 import { parseAmountYi } from "@/lib/market-format";
+import { shanghaiDate } from "@/lib/time";
 import type {
   MarketBreadth,
   MarketCandle,
@@ -32,6 +33,7 @@ const QUOTE_FIELDS = [
   "f46",
   "f47",
   "f48",
+  "f50",
   "f57",
   "f58",
   "f60",
@@ -40,7 +42,31 @@ const QUOTE_FIELDS = [
   "f169",
   "f170",
   "f9",
+  "f22",
   "f59",
+].join(",");
+
+/** 东财批量接口 ulist.np/get（fltt=2 直接返回浮点值，包含量比 f10、5 分钟涨幅 f11、涨速 f22） */
+const BATCH_QUOTE_FIELDS = [
+  "f2",
+  "f3",
+  "f4",
+  "f5",
+  "f6",
+  "f8",
+  "f9",
+  "f10",
+  "f11",
+  "f12",
+  "f13",
+  "f14",
+  "f15",
+  "f16",
+  "f17",
+  "f18",
+  "f20",
+  "f22",
+  "f152",
 ].join(",");
 
 export const DEFAULT_INDEX_CODES = ["000001", "399001", "399006", "000688", "899050"];
@@ -385,6 +411,8 @@ async function fetchEastmoneyQuote(code: string, kind: SecurityKind): Promise<Ma
   const turnoverValue = normalizeNumber(data.f48);
   const volumeHands = normalizeNumber(data.f47);
   const marketCapValue = normalizeNumber(data.f116);
+  const volumeRatio = normalizeScaled(data.f50);
+  const speed = normalizeScaled(data.f22);
 
   return {
     code,
@@ -398,6 +426,8 @@ async function fetchEastmoneyQuote(code: string, kind: SecurityKind): Promise<Ma
     marketCap: formatCny100M(marketCapValue),
     turnoverValue: turnoverValue ?? undefined,
     volumeLots: volumeHands ?? undefined,
+    volumeRatio: volumeRatio !== null && volumeRatio > 0 ? volumeRatio : undefined,
+    speed: speed ?? undefined,
     pe,
     high,
     low,
@@ -408,6 +438,92 @@ async function fetchEastmoneyQuote(code: string, kind: SecurityKind): Promise<Ma
     updatedAt: nowIso(),
     tradeStatus: usedFallback ? "unknown" : "trading",
   };
+}
+
+interface EastmoneyBatchResponse {
+  rc: number;
+  data?: {
+    diff?: Array<Record<string, unknown>>;
+  };
+}
+
+/** 一次 HTTP 请求批量拉取多只东财实时行情（含 f10 量比、f11 5 分钟涨跌幅、f22 涨速） */
+export async function fetchEastmoneyBatchQuotes(
+  codes: string[],
+  kind: SecurityKind = "stock"
+): Promise<Map<string, MarketQuote>> {
+  const result = new Map<string, MarketQuote>();
+  const codeBySecid = new Map<string, string>();
+  const secids: string[] = [];
+  for (const raw of codes) {
+    const normalized = normalizeCode(raw);
+    if (!normalized) continue;
+    const secid = secidFor(normalized.code, kind);
+    if (!secid || codeBySecid.has(secid)) continue;
+    codeBySecid.set(secid, normalized.code);
+    secids.push(secid);
+  }
+  if (secids.length === 0) return result;
+
+  const url = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${secids.join(",")}&fields=${BATCH_QUOTE_FIELDS}`;
+  const json = await fetchJson<EastmoneyBatchResponse>(url);
+  const items = json.data?.diff ?? [];
+  if (json.rc !== 0 || items.length === 0) return result;
+
+  const updatedAt = nowIso();
+  for (const item of items) {
+    const marketNum = normalizeNumber(item.f13);
+    const rawCode = typeof item.f12 === "string" ? item.f12 : null;
+    if (marketNum === null || !rawCode) continue;
+    const code = codeBySecid.get(`${marketNum}.${rawCode}`);
+    if (!code) continue;
+
+    const livePrice = normalizeNumber(item.f2);
+    const livePrevClose = normalizeNumber(item.f18);
+    if (livePrice === null || livePrice <= 0 || livePrevClose === null || livePrevClose <= 0) continue;
+
+    const fallback = fallbackQuoteFor(code, kind);
+    const high = normalizeNumber(item.f15) ?? fallback?.high ?? livePrice;
+    const low = normalizeNumber(item.f16) ?? fallback?.low ?? livePrice;
+    const open = normalizeNumber(item.f17) ?? fallback?.open ?? livePrice;
+    const changeAmount = normalizeNumber(item.f4) ?? livePrice - livePrevClose;
+    const changePercent = normalizeNumber(item.f3) ?? ((livePrice - livePrevClose) / livePrevClose) * 100;
+    const turnoverRate = normalizeNumber(item.f8) ?? fallback?.turnoverRate ?? 0;
+    const pe = normalizeNumber(item.f9) ?? fallback?.pe ?? 0;
+    const volumeHands = normalizeNumber(item.f5);
+    const turnoverValue = normalizeNumber(item.f6);
+    const marketCapValue = normalizeNumber(item.f20);
+    const volumeRatio = normalizeNumber(item.f10);
+    const fiveMinChangePct = normalizeNumber(item.f11);
+    const speed = normalizeNumber(item.f22);
+
+    result.set(code, {
+      code,
+      name: String(item.f14 ?? fallback?.name ?? code),
+      price: livePrice,
+      changePercent: round2(changePercent),
+      changeAmount: round2(changeAmount),
+      volume: formatLots(volumeHands),
+      turnover: formatCny100M(turnoverValue),
+      turnoverRate: round2(turnoverRate),
+      marketCap: formatCny100M(marketCapValue),
+      turnoverValue: turnoverValue ?? undefined,
+      volumeLots: volumeHands ?? undefined,
+      volumeRatio: volumeRatio !== null && volumeRatio > 0 ? round2(volumeRatio) : undefined,
+      fiveMinChangePct: fiveMinChangePct !== null ? round2(fiveMinChangePct) : undefined,
+      speed: speed !== null ? round2(speed) : undefined,
+      pe: round2(pe),
+      high,
+      low,
+      open,
+      prevClose: livePrevClose,
+      source: "eastmoney",
+      sourceLabel: SOURCE_LABELS.eastmoney,
+      updatedAt,
+      tradeStatus: "trading",
+    });
+  }
+  return result;
 }
 
 function parseTencentTradeTime(value: string | undefined): string {
@@ -424,15 +540,7 @@ function parseTencentAmountCny(parts: string[]): number | null {
   return amountWan === null ? null : amountWan * 10_000;
 }
 
-async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<MarketQuote | null> {
-  const symbol = tencentSymbolFor(code, kind);
-  if (!symbol) return null;
-  const url = `https://qt.gtimg.cn/q=${symbol}`;
-  const text = await fetchTencentText(url);
-  const match = text.match(new RegExp(`v_${escapeRegExp(symbol)}="([^"]+)"`));
-  if (!match) return null;
-
-  const parts = match[1].split("~");
+function parseTencentQuoteParts(code: string, parts: string[], kind: SecurityKind): MarketQuote | null {
   const fallback = fallbackQuoteFor(code, kind);
   const livePrice = parseNumber(parts[3]) || null;
   const livePrevClose = parseNumber(parts[4]) || null;
@@ -451,6 +559,7 @@ async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<Mark
   const turnoverRate = parseNumber(parts[38]) ?? fallback?.turnoverRate ?? 0;
   const pe = parseNumber(parts[39]) ?? fallback?.pe ?? 0;
   const marketCap100M = parseNumber(parts[45]) ?? null;
+  const volumeRatio = parseNumber(parts[49]);
 
   return {
     code,
@@ -464,6 +573,7 @@ async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<Mark
     marketCap: marketCap100M === null ? "N/A" : formatCny100MFromUnit(marketCap100M),
     turnoverValue: turnoverValue ?? undefined,
     volumeLots: volumeHands ?? undefined,
+    volumeRatio: volumeRatio !== null && volumeRatio > 0 ? round2(volumeRatio) : undefined,
     pe,
     high,
     low,
@@ -474,6 +584,76 @@ async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<Mark
     updatedAt: parseTencentTradeTime(parts[30]),
     tradeStatus: usedFallback ? "unknown" : "trading",
   };
+}
+
+async function fetchTencentQuote(code: string, kind: SecurityKind): Promise<MarketQuote | null> {
+  const symbol = tencentSymbolFor(code, kind);
+  if (!symbol) return null;
+  const url = `https://qt.gtimg.cn/q=${symbol}`;
+  const text = await fetchTencentText(url);
+  const match = text.match(new RegExp(`v_${escapeRegExp(symbol)}="([^"]+)"`));
+  if (!match) return null;
+  return parseTencentQuoteParts(code, match[1].split("~"), kind);
+}
+
+/** 一次 HTTP 请求批量拉取多只腾讯实时行情（东财批量失败或部分缺字段时补齐） */
+export async function fetchTencentBatchQuotes(
+  codes: string[],
+  kind: SecurityKind = "stock"
+): Promise<Map<string, MarketQuote>> {
+  const result = new Map<string, MarketQuote>();
+  const codeBySymbol = new Map<string, string>();
+  const symbols: string[] = [];
+  for (const raw of codes) {
+    const normalized = normalizeCode(raw);
+    if (!normalized) continue;
+    const symbol = tencentSymbolFor(normalized.code, kind);
+    if (!symbol || codeBySymbol.has(symbol)) continue;
+    codeBySymbol.set(symbol, normalized.code);
+    symbols.push(symbol);
+  }
+  if (symbols.length === 0) return result;
+
+  const url = `https://qt.gtimg.cn/q=${symbols.join(",")}`;
+  const text = await fetchTencentText(url);
+  for (const [symbol, code] of codeBySymbol.entries()) {
+    const match = text.match(new RegExp(`v_${escapeRegExp(symbol)}="([^"]+)"`));
+    if (!match) continue;
+    const parsed = parseTencentQuoteParts(code, match[1].split("~"), kind);
+    if (parsed && parsed.source !== "mock") result.set(code, parsed);
+  }
+  return result;
+}
+
+/** 批量拉取实时报价：东财批量 1 次请求 → 缺口由腾讯批量 1 次补齐（代替旧版 40 次单股扇出） */
+export async function fetchLiveQuotesBatch(
+  codes: string[],
+  kind: SecurityKind = "stock"
+): Promise<Map<string, MarketQuote>> {
+  const normalized = codes
+    .map((raw) => normalizeCode(raw)?.code)
+    .filter((code): code is string => Boolean(code));
+  const unique = [...new Set(normalized)];
+  const merged = new Map<string, MarketQuote>();
+  if (unique.length === 0) return merged;
+
+  try {
+    const em = await fetchEastmoneyBatchQuotes(unique, kind);
+    for (const [code, quote] of em) merged.set(code, quote);
+  } catch {
+    // 东财批量接口失败时整体走下方腾讯批量备源
+  }
+
+  const missing = unique.filter((code) => !merged.has(code));
+  if (missing.length > 0) {
+    try {
+      const tx = await fetchTencentBatchQuotes(missing, kind);
+      for (const [code, quote] of tx) merged.set(code, quote);
+    } catch {
+      // 上游全部不可用，由调用方按需回退 mock
+    }
+  }
+  return merged;
 }
 
 export async function fetchLiveQuote(code: string, kind: SecurityKind = "stock"): Promise<MarketQuote | null> {
@@ -539,7 +719,7 @@ function minLiveCandlesFor(timeframe: MarketTimeframe): number {
   }
 }
 
-export async function fetchLiveCandles(code: string, timeframe: MarketTimeframe = "day"): Promise<MarketCandle[]> {
+async function fetchEastmoneyCandles(code: string, timeframe: MarketTimeframe): Promise<MarketCandle[]> {
   const secid = secidFor(code);
   if (!secid) return [];
   const klt = kltFor(timeframe);
@@ -571,6 +751,208 @@ export async function fetchLiveCandles(code: string, timeframe: MarketTimeframe 
       close: Number(close),
       volume: Number(volume),
     };
+  });
+}
+
+interface TencentKlineResponse {
+  code?: number;
+  data?: Record<string, Record<string, unknown>>;
+}
+
+function parseTencentKlineTimestamp(raw: string, timeframe: MarketTimeframe): number | null {
+  if (timeframe === "minute") {
+    // 202611191456 -> 2026-11-19T14:56:00+08:00
+    if (!/^\d{12}$/.test(raw)) return null;
+    const iso = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T${raw.slice(8, 10)}:${raw.slice(10, 12)}:00+08:00`;
+    const ms = new Date(iso).getTime();
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const ms = new Date(`${raw}T00:00:00+08:00`).getTime();
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/** 腾讯前复权历史 K 线与分钟 K 线（东财 K 线失败时的实时备源） */
+export async function fetchTencentCandles(
+  code: string,
+  timeframe: MarketTimeframe = "day",
+  limitOverride?: number
+): Promise<MarketCandle[]> {
+  const symbol = tencentSymbolFor(code);
+  if (!symbol) return [];
+  const count = limitOverride ?? maxCandleCountFor(timeframe);
+  const url =
+    timeframe === "minute"
+      ? `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/kline/mkline?param=${symbol},m1,,${count}`
+      : `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param=${symbol},${timeframe},,,${count},qfq`;
+
+  const json = await fetchWithTimeout(
+    url,
+    {
+      headers: {
+        Referer: TENCENT_REFERER,
+        "User-Agent": "Mozilla/5.0 A-Share-Sentinel-X/1.0",
+      },
+      next: { revalidate: timeframe === "minute" ? 15 : 300 },
+    },
+    TENCENT_TIMEOUT_MS,
+    async (response) => {
+      if (!response.ok) throw new Error(`Tencent kline failed: ${response.status}`);
+      return (await response.json()) as TencentKlineResponse;
+    }
+  );
+  if (json.code !== 0 || !json.data) return [];
+  const bucket = json.data[symbol];
+  if (!bucket) return [];
+
+  const rowsRaw =
+    timeframe === "minute"
+      ? bucket.m1
+      : bucket[`qfq${timeframe}`] ?? bucket[timeframe];
+  if (!Array.isArray(rowsRaw) || rowsRaw.length === 0) return [];
+
+  const rows = rowsRaw as Array<Array<unknown>>;
+  const latestMinutePrefix =
+    timeframe === "minute" && typeof rows[rows.length - 1]?.[0] === "string"
+      ? (rows[rows.length - 1][0] as string).slice(0, 8)
+      : undefined;
+  const scoped =
+    timeframe === "minute" && latestMinutePrefix
+      ? rows.filter((row) => typeof row[0] === "string" && (row[0] as string).startsWith(latestMinutePrefix))
+      : rows;
+
+  const candles: MarketCandle[] = [];
+  for (const row of scoped) {
+    if (!Array.isArray(row) || row.length < 6) continue;
+    const timestamp = parseTencentKlineTimestamp(String(row[0]), timeframe);
+    const open = Number(row[1]);
+    const close = Number(row[2]);
+    const high = Number(row[3]);
+    const low = Number(row[4]);
+    const volume = Number(row[5]);
+    if (
+      timestamp === null ||
+      !Number.isFinite(open) ||
+      !Number.isFinite(close) ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(volume)
+    ) {
+      continue;
+    }
+    candles.push({ time: timestamp, open, high, low, close, volume });
+  }
+  return candles.slice(-count);
+}
+
+export async function fetchLiveCandles(code: string, timeframe: MarketTimeframe = "day"): Promise<MarketCandle[]> {
+  if (!normalizeCode(code)) return [];
+  const minLive = minLiveCandlesFor(timeframe);
+  try {
+    const eastmoney = await fetchEastmoneyCandles(code, timeframe);
+    if (eastmoney.length >= minLive) return eastmoney;
+  } catch {
+    // 东财 K 线偶发断连，回退到腾讯前复权 K 线
+  }
+
+  try {
+    return await fetchTencentCandles(code, timeframe);
+  } catch {
+    return [];
+  }
+}
+
+export interface DailyBaselineStats {
+  high20: number;
+  low20: number;
+  avg20Volume: number;
+}
+
+/** 从历史日 K 计算近 20 日高低点与 20 日均量（纯函数，用于激活信号引擎的突破/放量规则） */
+export function computeDailyBaseline(candles: MarketCandle[]): DailyBaselineStats | null {
+  if (candles.length < 5) return null;
+  const sorted = [...candles].sort((a, b) => a.time - b.time);
+  // 排除可能未收盘的当日最新一根（若样本足够 21 根），用前 20 个完整交易日作基准
+  const window = sorted.length > 20 ? sorted.slice(-21, -1) : sorted.slice(-20);
+  if (window.length === 0) return null;
+  const high20 = round2(Math.max(...window.map((c) => c.high)));
+  const low20 = round2(Math.min(...window.map((c) => c.low)));
+  const avg20Volume = Math.round(window.reduce((sum, c) => sum + c.volume, 0) / window.length);
+  if (!Number.isFinite(high20) || !Number.isFinite(low20) || !Number.isFinite(avg20Volume)) return null;
+  return { high20, low20, avg20Volume };
+}
+
+const DAILY_STATS_TTL_MS = 30 * 60 * 1000;
+const DAILY_STATS_MAX_ENTRIES = 200;
+const dailyStatsCache = new Map<string, { stats: DailyBaselineStats; expiresAt: number }>();
+
+async function fetchDailyBaselineCached(code: string): Promise<DailyBaselineStats | null> {
+  const key = `${code}:${shanghaiDate()}`;
+  const now = Date.now();
+  const hit = dailyStatsCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.stats;
+
+  // 25 根日 K 足够算 20 日基准，优先用低延迟腾讯日 K，失败再走通用 fetchLiveCandles
+  let candles: MarketCandle[] = [];
+  try {
+    candles = await fetchTencentCandles(code, "day", 25);
+  } catch {
+    candles = [];
+  }
+  if (candles.length < 5) {
+    try {
+      candles = await fetchLiveCandles(code, "day");
+    } catch {
+      candles = [];
+    }
+  }
+  const stats = computeDailyBaseline(candles);
+  if (!stats) return null;
+  if (dailyStatsCache.size >= DAILY_STATS_MAX_ENTRIES) {
+    const oldest = dailyStatsCache.keys().next().value;
+    if (oldest) dailyStatsCache.delete(oldest);
+  }
+  dailyStatsCache.set(key, { stats, expiresAt: now + DAILY_STATS_TTL_MS });
+  return stats;
+}
+
+/**
+ * 为重点实时报价补充近 20 日高低点与 20 日均量（优先持仓股 + 波动最大标的），
+ * 带内存 TTL 缓存与超时上限，不拖慢 /api/sentinel/input。
+ */
+export async function enrichQuotesWithDailyStats(
+  quotes: MarketQuote[],
+  options: { priorityCodes?: string[]; maxEnrich?: number; budgetMs?: number } = {}
+): Promise<MarketQuote[]> {
+  const maxEnrich = options.maxEnrich ?? 12;
+  const budgetMs = options.budgetMs ?? 2000;
+  const prioritySet = new Set(options.priorityCodes ?? []);
+
+  const liveQuotes = quotes.filter((q) => q.source !== "mock");
+  const candidates = [
+    ...liveQuotes.filter((q) => prioritySet.has(q.code)),
+    ...liveQuotes
+      .filter((q) => !prioritySet.has(q.code))
+      .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)),
+  ].slice(0, maxEnrich);
+
+  if (candidates.length === 0) return quotes;
+
+  const statsMap = new Map<string, DailyBaselineStats>();
+  const fetchAll = Promise.allSettled(
+    candidates.map(async (q) => {
+      const stats = await fetchDailyBaselineCached(q.code);
+      if (stats) statsMap.set(q.code, stats);
+    })
+  );
+  await Promise.race([
+    fetchAll,
+    new Promise<void>((resolve) => setTimeout(resolve, budgetMs)),
+  ]);
+
+  return quotes.map((quote) => {
+    const stats = statsMap.get(quote.code);
+    return stats ? { ...quote, ...stats } : quote;
   });
 }
 
@@ -632,12 +1014,9 @@ function snapshotSourceFor(quotes: MarketQuote[]): MarketDataSource {
 export async function getMarketSnapshot(codes?: string[]): Promise<MarketSnapshot> {
   const valid = (codes ?? []).map((code) => normalizeCode(code)?.code).filter((code): code is string => Boolean(code));
   const selectedCodes = (valid.length ? valid : stocks.slice(0, 24).map((item) => item.code)).slice(0, MAX_SNAPSHOT_CODES);
-  const settled = await Promise.allSettled(selectedCodes.map((code) => fetchLiveQuote(code)));
-  const quotes = settled
-    .map((result, index) => {
-      if (result.status === "fulfilled" && result.value) return result.value;
-      return mockQuote(selectedCodes[index]);
-    })
+  const liveMap = await fetchLiveQuotesBatch(selectedCodes, "stock");
+  const quotes = selectedCodes
+    .map((code) => liveMap.get(code) ?? mockQuote(code))
     .filter(Boolean) as MarketQuote[];
   const liveCount = quotes.filter((item) => item.source !== "mock").length;
   const source = snapshotSourceFor(quotes);
@@ -670,12 +1049,9 @@ function buildBreadthFromQuotes(quotes: MarketQuote[]): MarketBreadth {
 }
 
 export async function getMarketIndexSnapshot(): Promise<MarketIndexSnapshot> {
-  const settled = await Promise.allSettled(DEFAULT_INDEX_CODES.map((code) => fetchLiveQuote(code, "index")));
-  const indices = settled
-    .map((result, index) => {
-      if (result.status === "fulfilled" && result.value) return result.value;
-      return mockIndexQuote(DEFAULT_INDEX_CODES[index]);
-    })
+  const liveMap = await fetchLiveQuotesBatch(DEFAULT_INDEX_CODES, "index");
+  const indices = DEFAULT_INDEX_CODES
+    .map((code) => liveMap.get(code) ?? mockIndexQuote(code))
     .filter(Boolean) as MarketQuote[];
   const liveCount = indices.filter((item) => item.source !== "mock").length;
   const source = snapshotSourceFor(indices);

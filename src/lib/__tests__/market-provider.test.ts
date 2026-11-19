@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCode, secidFor, tencentSymbolFor } from "@/lib/market-provider";
+import { computeDailyBaseline, normalizeCode, secidFor, tencentSymbolFor } from "@/lib/market-provider";
 import { rsi } from "@/lib/market-indicators";
 
 describe("code normalization", () => {
@@ -41,5 +41,33 @@ describe("rsi (Wilder)", () => {
       45.614, 46.282, 46.282,
     ];
     expect(rsi(closes)).toBeCloseTo(70.53, 1);
+  });
+});
+
+describe("computeDailyBaseline", () => {
+  it("returns null when fewer than 5 daily candles exist", () => {
+    expect(computeDailyBaseline([])).toBeNull();
+    expect(
+      computeDailyBaseline([
+        { time: 1, open: 10, high: 11, low: 9, close: 10, volume: 100 },
+        { time: 2, open: 10, high: 12, low: 9.5, close: 11, volume: 120 },
+      ])
+    ).toBeNull();
+  });
+
+  it("computes high20, low20, and avg20Volume excluding the latest bar when >20 candles exist", () => {
+    const candles = Array.from({ length: 21 }, (_, idx) => ({
+      time: 1_700_000_000 + idx * 86_400,
+      open: 10 + idx,
+      high: idx === 20 ? 999 : 20 + idx,
+      low: idx === 20 ? 1 : 10 + idx,
+      close: 15 + idx,
+      volume: idx === 20 ? 9_999_999 : 1000,
+    }));
+    expect(computeDailyBaseline(candles)).toEqual({
+      high20: 39,
+      low20: 10,
+      avg20Volume: 1000,
+    });
   });
 });

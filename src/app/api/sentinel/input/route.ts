@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getMarketIndexSnapshot, getMarketSnapshot, MAX_SNAPSHOT_CODES, normalizeCode } from "@/lib/market-provider";
+import {
+  enrichQuotesWithDailyStats,
+  getMarketIndexSnapshot,
+  getMarketSnapshot,
+  MAX_SNAPSHOT_CODES,
+  normalizeCode,
+} from "@/lib/market-provider";
 import { buildLiveSentinelInput } from "@/lib/sentinel/live-input";
 import { stocks as universe } from "@/mock/stocks";
 import { getSectorById } from "@/mock/sectors";
@@ -39,8 +45,13 @@ export async function GET(request: NextRequest) {
   const heldCodes = held.map((c) => normalizeCode(c)!.code);
   const codes = [...new Set([...heldCodes, ...SAMPLE])].slice(0, MAX_SNAPSHOT_CODES);
   const [snapshot, indexSnapshot] = await Promise.all([getMarketSnapshot(codes), getMarketIndexSnapshot()]);
+  const enrichedQuotes = await enrichQuotesWithDailyStats(snapshot.quotes, {
+    priorityCodes: heldCodes,
+    maxEnrich: 12,
+    budgetMs: 2000,
+  });
   const input = buildLiveSentinelInput({
-    quotes: snapshot.quotes,
+    quotes: enrichedQuotes,
     indices: indexSnapshot.indices,
     sectorOf: (code) => sectorByCode.get(code) ?? undefined,
   });
