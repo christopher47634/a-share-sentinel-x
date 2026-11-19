@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMarketStockDetail, normalizeCode } from "@/lib/market-provider";
-import { complianceEngine } from "@/lib/sentinel-core";
+import { fetchStockAnnouncements } from "@/lib/news-provider";
+import {
+  buildLocalResearchAnswer,
+  callUpstreamLlm,
+  resolveAiProvider,
+  sanitizeHistory,
+  sanitizePortfolioContext,
+  streamUpstreamCompatLlm,
+  type ResearchPromptPayload,
+} from "@/lib/ai-provider";
 import { clientIp, createRateLimiter } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 const MAX_QUESTION_LENGTH = 2000;
-const OPENAI_TIMEOUT_MS = 30_000;
-const DEFAULT_MODEL = "gpt-5.5";
 // 每个 IP 每分钟 10 次；模型调用要花钱，不能无限打
 const limiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 
@@ -18,28 +25,13 @@ function badRequest(error: string) {
 interface ChatRequestBody {
   question?: string;
   stockCode?: string;
+  history?: unknown;
+  portfolioContext?: unknown;
+  stream?: boolean;
 }
 
-function fallbackAnswer(question: string, stockName: string, summary: string, bullets: string[]): string {
-  return [
-    `我先按当前行情和技术指标给你一个研究视角：${stockName} 现在的状态是「${summary}」。`,
-    ...bullets.map((item) => `- ${item}`),
-    question.includes("能买吗") || question.includes("推荐")
-      ? "我的建议是把它放进观察清单，用趋势强度、量能和回撤一起看，不要只按单日涨跌做决定。"
-      : "如果你想继续深入，可以问我：趋势有没有变强、风险在哪、和同板块谁更值得观察。",
-    "提示：这里是研究辅助，不构成投资建议。",
-  ].join("\n");
-}
-
-function extractOutputText(payload: unknown): string | null {
-  const data = payload as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
-  if (typeof data.output_text === "string") return data.output_text;
-  const text = data.output
-    ?.flatMap((item) => item.content ?? [])
-    .map((item) => item.text)
-    .filter(Boolean)
-    .join("\n");
-  return text || null;
+function sseEncode(event: Record<string, unknown>): Uint8Array {
+  return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
 }
 
 export async function POST(request: NextRequest) {
@@ -64,75 +56,128 @@ export async function POST(request: NextRequest) {
 
   const question = body.question?.trim() || "请解释当前走势";
   const stockCode = body.stockCode || "600519";
-  if (!normalizeCode(stockCode)) return badRequest("invalid_stock_code");
-  const detail = await getMarketStockDetail(stockCode);
+  const normalized = normalizeCode(stockCode);
+  if (!normalized) return badRequest("invalid_stock_code");
+
+  const history = sanitizeHistory(body.history);
+  const portfolioContext = sanitizePortfolioContext(body.portfolioContext);
+  const wantStream = body.stream === true;
+
+  const [detail, announcements] = await Promise.all([
+    getMarketStockDetail(normalized.code),
+    fetchStockAnnouncements([normalized.code], { pageSize: 5, maxAgeDays: 30 }),
+  ]);
 
   if (!detail) {
     return NextResponse.json({ answer: "没有找到这只股票的数据。", provider: "fallback" });
   }
 
-  const context = {
+  const context: ResearchPromptPayload["context"] = {
     quote: detail.quote,
     analysis: detail.analysis,
     candlesTail: detail.candles.slice(-20),
     fallbackUsed: detail.fallbackUsed,
+    portfolio: portfolioContext,
+    announcements,
   };
+  const payload: ResearchPromptPayload = { question, history, context };
+  const provider = resolveAiProvider();
+  const fallback = () =>
+    buildLocalResearchAnswer({ question, detail, portfolioContext, announcements });
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({
-      answer: fallbackAnswer(question, detail.quote.name, detail.analysis.summary, detail.analysis.bullets),
-      provider: "local-research-engine",
-      context,
-    });
-  }
+  if (wantStream) {
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          let finalAnswer: string | null = null;
+          let usedProvider = provider.label;
+          let usedModel = provider.model;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+          if (provider.kind === "openai-compatible") {
+            let emitted = false;
+            finalAnswer = await streamUpstreamCompatLlm(provider, payload, (chunk) => {
+              emitted = true;
+              controller.enqueue(sseEncode({ type: "delta", text: chunk }));
+            });
+            if (!finalAnswer) {
+              usedProvider = "local-research-engine";
+              usedModel = "local-research-engine";
+              finalAnswer = fallback();
+              if (!emitted) {
+                controller.enqueue(sseEncode({ type: "delta", text: finalAnswer }));
+              }
+            }
+          } else if (provider.kind === "openai-responses") {
+            finalAnswer = await callUpstreamLlm(provider, payload);
+            if (!finalAnswer) {
+              usedProvider = "local-research-engine";
+              usedModel = "local-research-engine";
+              finalAnswer = fallback();
+            }
+            controller.enqueue(sseEncode({ type: "delta", text: finalAnswer }));
+          } else {
+            finalAnswer = fallback();
+            // 按行平滑推送，兼顾首字速度与阅读节奏
+            for (const line of finalAnswer.split("\n")) {
+              controller.enqueue(sseEncode({ type: "delta", text: `${line}\n` }));
+            }
+          }
+
+          controller.enqueue(
+            sseEncode({
+              type: "done",
+              answer: finalAnswer,
+              provider: usedProvider,
+              model: usedModel,
+              announcementsCount: announcements.length,
+              hasPortfolioContext: Boolean(portfolioContext?.position),
+            })
+          );
+        } catch {
+          const safe = fallback();
+          controller.enqueue(
+            sseEncode({
+              type: "done",
+              answer: safe,
+              provider: "local-research-engine",
+              model: "local-research-engine",
+              announcementsCount: announcements.length,
+              hasPortfolioContext: Boolean(portfolioContext?.position),
+            })
+          );
+        } finally {
+          controller.close();
+        }
       },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
-        instructions:
-          "你是 A-Share Sentinel X 的 AI 研究助手。只基于传入行情、技术指标和持仓上下文回答。不要承诺收益，不要给出绝对买卖指令。用中文，短句，结论先行，必须说明数据时间和风险。",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `用户问题：${question}\n\n行情上下文：${JSON.stringify(context)}`,
-              },
-            ],
-          },
-        ],
-      }),
     });
 
-    if (!response.ok) throw new Error(`OpenAI API failed: ${response.status}`);
-    const json = await response.json();
-    const answer = extractOutputText(json);
-    return NextResponse.json({
-      // 模型输出同样过一遍合规过滤，和本地生成的文字一个标准
-      answer: answer
-        ? complianceEngine(answer)
-        : fallbackAnswer(question, detail.quote.name, detail.analysis.summary, detail.analysis.bullets),
-      provider: "openai",
-      context,
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
     });
-  } catch {
-    return NextResponse.json({
-      answer: fallbackAnswer(question, detail.quote.name, detail.analysis.summary, detail.analysis.bullets),
-      provider: "local-research-engine",
-      context,
-    });
-  } finally {
-    clearTimeout(timeout);
   }
+
+  const upstream = await callUpstreamLlm(provider, payload);
+  if (upstream) {
+    return NextResponse.json({
+      answer: upstream,
+      provider: provider.label,
+      model: provider.model,
+      announcementsCount: announcements.length,
+      hasPortfolioContext: Boolean(portfolioContext?.position),
+      context,
+    });
+  }
+
+  return NextResponse.json({
+    answer: fallback(),
+    provider: "local-research-engine",
+    model: "local-research-engine",
+    announcementsCount: announcements.length,
+    hasPortfolioContext: Boolean(portfolioContext?.position),
+    context,
+  });
 }
