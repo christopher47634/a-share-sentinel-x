@@ -28,6 +28,7 @@ export * from "./journal";
 export * from "./compliance";
 export * from "./demo";
 export * from "./live-input";
+export * from "./backtest";
 
 import type { MarketRadarResult, Signal, Alert, RiskShieldResult, CausalityReport, JournalResult } from "./types";
 import { marketRadarEngine } from "./radar";
