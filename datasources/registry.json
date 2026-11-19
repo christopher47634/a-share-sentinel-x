@@ -102,6 +102,26 @@
       "notes": "东财 K 线失败时的实时备源，同时用于为 Sentinel 重点标的补充近 20 日高低点与 20 日均量。"
     },
     {
+      "id": "eastmoney-announcements",
+      "name": "东方财富沪深公开公告",
+      "kind": "live",
+      "role": "optional",
+      "marketSource": null,
+      "isRealData": true,
+      "auth": "none",
+      "endpoint": "https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size={pageSize}&page_index=1&ann_type=A&stock_list={codes}",
+      "module": "src/lib/news-provider.ts",
+      "usedBy": ["fetchStockAnnouncements"],
+      "fallback": null,
+      "timeoutMs": 2500,
+      "health": {
+        "url": "https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=2&page_index=1&ann_type=A&stock_list=600519",
+        "expectJsonPath": "data.list",
+        "referer": "https://quote.eastmoney.com/"
+      },
+      "notes": "单次 HTTP 批量获取多只 A 股近 30 日交易所公开公告，供归因解盘（Causality Lab）与 AI 研究副驾作为可验证事件证据。失败时返回空列表，不回退假新闻。"
+    },
+    {
       "id": "mock-market",
       "name": "本地演示行情",
       "kind": "mock",
@@ -118,6 +138,22 @@
       "notes": "假数据：实时源全部失败时补位，界面以 Mock fallback 标注。板块、新闻事件、AI 页面（市场雷达、盯盘、解盘、风险护盾、复盘）的演示样本也来自这里或 sentinel-core 的 generateSentinelDemoData，不是真实行情。"
     },
     {
+      "id": "openai-compatible-llm",
+      "name": "OpenAI-Compatible LLM（默认 DeepSeek）",
+      "kind": "llm",
+      "role": "optional",
+      "marketSource": null,
+      "isRealData": false,
+      "auth": "env:AI_API_KEY",
+      "endpoint": "https://api.deepseek.com/v1/chat/completions",
+      "module": "src/lib/ai-provider.ts",
+      "usedBy": ["resolveAiProvider", "callUpstreamLlm", "streamUpstreamCompatLlm"],
+      "fallback": "local-rule-engine",
+      "timeoutMs": 30000,
+      "health": null,
+      "notes": "AI 研究副驾优先接入方式，可通过 AI_BASE_URL 与 AI_MODEL 切换任意 OpenAI Chat Completions 兼容模型，支持 SSE 流式输出与多轮对话；输出统一经 complianceEngine 过滤。"
+    },
+    {
       "id": "openai-responses",
       "name": "OpenAI Responses API",
       "kind": "llm",
@@ -126,12 +162,12 @@
       "isRealData": false,
       "auth": "env:OPENAI_API_KEY",
       "endpoint": "https://api.openai.com/v1/responses",
-      "module": "src/app/api/ai/chat/route.ts",
-      "usedBy": ["POST"],
+      "module": "src/lib/ai-provider.ts",
+      "usedBy": ["resolveAiProvider", "callUpstreamLlm"],
       "fallback": "local-rule-engine",
       "timeoutMs": 30000,
       "health": null,
-      "notes": "仅 AI 研究助手使用。未配置密钥时由本地规则引擎生成回答；输出经 complianceEngine 过滤。健康检查需要密钥，不在 CI 里跑。"
+      "notes": "未配置 AI_API_KEY 时的备选大模型通道；全部未配置或超时时回退到本地研究引擎，输出经 complianceEngine 过滤。"
     }
   ]
 }

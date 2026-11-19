@@ -168,8 +168,8 @@ export function useSentinelCore() {
       stocks: live.input.stocks,
       sectors: live.input.sectors,
       account: localAccount ?? demo.account,
-      // 实时模式下没有可验证的新闻源，不再拿演示事件做归因
-      newsEvents: [],
+      // 实时模式仅使用从交易所公告接口拉取并校验过的近期公开公告，不用演示事件充数
+      newsEvents: live.input.newsEvents ?? [],
     };
     const source: SentinelDataSource = {
       mode: "live",

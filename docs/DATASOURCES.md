@@ -9,7 +9,9 @@
 | `eastmoney-kline` | 东方财富历史 K 线 | 实时 | 主源 | 是 | none | tencent-kline | 3500 ms |
 | `tencent-quote` | 腾讯行情 | 实时 | 备用 | 是 | none | mock-market | 5000 ms |
 | `tencent-kline` | 腾讯前复权历史与分钟 K 线 | 实时 | 备用 | 是 | none | mock-market | 5000 ms |
+| `eastmoney-announcements` | 东方财富沪深公开公告 | 实时 | 可选 | 是 | none | — | 2500 ms |
 | `mock-market` | 本地演示行情 | 演示（假数据） | 备用 | 否 | none | — | — |
+| `openai-compatible-llm` | OpenAI-Compatible LLM（默认 DeepSeek） | 大模型 | 可选 | 否 | env:AI_API_KEY | local-rule-engine | 30000 ms |
 | `openai-responses` | OpenAI Responses API | 大模型 | 可选 | 否 | env:OPENAI_API_KEY | local-rule-engine | 30000 ms |
 
 ## 东方财富实时行情（`eastmoney-quote`）
@@ -47,17 +49,30 @@
 - 健康检查：`https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param=sh600519,day,,,5,qfq`
 - 说明：东财 K 线失败时的实时备源，同时用于为 Sentinel 重点标的补充近 20 日高低点与 20 日均量。
 
+## 东方财富沪深公开公告（`eastmoney-announcements`）
+
+- 地址：`https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size={pageSize}&page_index=1&ann_type=A&stock_list={codes}`
+- 代码：`src/lib/news-provider.ts` → `fetchStockAnnouncements`
+- 健康检查：`https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=2&page_index=1&ann_type=A&stock_list=600519`
+- 说明：单次 HTTP 批量获取多只 A 股近 30 日交易所公开公告，供归因解盘（Causality Lab）与 AI 研究副驾作为可验证事件证据。失败时返回空列表，不回退假新闻。
+
 ## 本地演示行情（`mock-market`）
 
 - 地址：`src/mock/`
 - 代码：`src/mock/market.ts` → `marketIndices`
 - 说明：假数据：实时源全部失败时补位，界面以 Mock fallback 标注。板块、新闻事件、AI 页面（市场雷达、盯盘、解盘、风险护盾、复盘）的演示样本也来自这里或 sentinel-core 的 generateSentinelDemoData，不是真实行情。
 
+## OpenAI-Compatible LLM（默认 DeepSeek）（`openai-compatible-llm`）
+
+- 地址：`https://api.deepseek.com/v1/chat/completions`
+- 代码：`src/lib/ai-provider.ts` → `resolveAiProvider`、`callUpstreamLlm`、`streamUpstreamCompatLlm`
+- 说明：AI 研究副驾优先接入方式，可通过 AI_BASE_URL 与 AI_MODEL 切换任意 OpenAI Chat Completions 兼容模型，支持 SSE 流式输出与多轮对话；输出统一经 complianceEngine 过滤。
+
 ## OpenAI Responses API（`openai-responses`）
 
 - 地址：`https://api.openai.com/v1/responses`
-- 代码：`src/app/api/ai/chat/route.ts` → `POST`
-- 说明：仅 AI 研究助手使用。未配置密钥时由本地规则引擎生成回答；输出经 complianceEngine 过滤。健康检查需要密钥，不在 CI 里跑。
+- 代码：`src/lib/ai-provider.ts` → `resolveAiProvider`、`callUpstreamLlm`
+- 说明：未配置 AI_API_KEY 时的备选大模型通道；全部未配置或超时时回退到本地研究引擎，输出经 complianceEngine 过滤。
 
 ## 健康检查
 

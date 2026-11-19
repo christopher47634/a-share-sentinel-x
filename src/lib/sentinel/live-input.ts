@@ -3,6 +3,7 @@
 
 import type { MarketQuote } from "@/types/market";
 import type { AccountTransaction, Position } from "@/types/account";
+import type { VerifiedNewsEvent } from "../news-provider";
 import { parseAmountYi } from "../market-format";
 import { shanghaiDate } from "../time";
 import type {
@@ -81,6 +82,7 @@ export interface LiveSentinelInput {
   indices: SentinelIndex[];
   stocks: SentinelStock[];
   sectors: SentinelSector[];
+  newsEvents?: VerifiedNewsEvent[];
 }
 
 /**
@@ -91,12 +93,14 @@ export function buildLiveSentinelInput(args: {
   quotes: MarketQuote[];
   indices: MarketQuote[];
   sectorOf: (code: string) => string | undefined;
+  newsEvents?: VerifiedNewsEvent[];
 }): LiveSentinelInput {
   const stocks = args.quotes.filter((q) => q.source !== "mock").map((q) => quoteToSentinelStock(q, args.sectorOf(q.code)));
   return {
     stocks,
     sectors: aggregateSectors(stocks),
     indices: args.indices.filter((q) => q.source !== "mock").map(quoteToSentinelIndex),
+    newsEvents: args.newsEvents ?? [],
   };
 }
 
