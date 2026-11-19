@@ -25,6 +25,22 @@ const HOLIDAYS: Record<number, readonly string[]> = {
     // 国庆节
     "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",
   ],
+  2027: [
+    // 元旦（1/1–1/3）
+    "2027-01-01",
+    // 春节（2/5–2/13，周末已自动排除）
+    "2027-02-05", "2027-02-08", "2027-02-09", "2027-02-10", "2027-02-11", "2027-02-12",
+    // 清明节（4/3–4/5）
+    "2027-04-05",
+    // 劳动节（5/1–5/5）
+    "2027-05-03", "2027-05-04", "2027-05-05",
+    // 端午节
+    "2027-06-09",
+    // 中秋节
+    "2027-09-15",
+    // 国庆节（10/1–10/7）
+    "2027-10-01", "2027-10-04", "2027-10-05", "2027-10-06", "2027-10-07",
+  ],
 };
 
 const holidaySets = new Map<number, Set<string>>(
@@ -106,25 +122,81 @@ function shanghaiMinutes(now: Date): number {
   return hour * 60 + minute;
 }
 
+function sessionFromMinutes(minutes: number): TradingSession {
+  if (minutes < 9 * 60 + 15) return "pre-open";
+  if (minutes < 9 * 60 + 25) return "opening-auction";
+  if (minutes < 9 * 60 + 30) return "pre-open";
+  if (minutes < 11 * 60 + 30) return "morning";
+  if (minutes < 13 * 60) return "lunch-break";
+  if (minutes < 14 * 60 + 57) return "afternoon";
+  if (minutes < 15 * 60) return "closing-auction";
+  return "closed";
+}
+
 /**
  * 当前处于哪个交易时段（上海时间）。
  * 9:15–9:25 集合竞价，9:30–11:30 上午连续竞价，13:00–14:57 下午连续竞价，14:57–15:00 收盘集合竞价。
  */
 export function tradingSession(now: Date = new Date()): TradingSession {
   if (!isTradingDay(shanghaiDate(now))) return "closed";
-  const t = shanghaiMinutes(now);
-  if (t < 9 * 60 + 15) return "pre-open";
-  if (t < 9 * 60 + 25) return "opening-auction";
-  if (t < 9 * 60 + 30) return "pre-open";
-  if (t < 11 * 60 + 30) return "morning";
-  if (t < 13 * 60) return "lunch-break";
-  if (t < 14 * 60 + 57) return "afternoon";
-  if (t < 15 * 60) return "closing-auction";
-  return "closed";
+  return sessionFromMinutes(shanghaiMinutes(now));
+}
+
+/**
+ * 面向 UI 展示和轮询节流的交易时段判定：当年份尚未录入休市表时，退化为仅按工作日判定并标记 calendarAvailable=false，
+ * 避免前端定时轮询因缺少次年休市表而抛错。账本 T+1 仍走严格的 isTradingDay / sellableFrom。
+ */
+export function safeTradingSession(now: Date = new Date()): { session: TradingSession; calendarAvailable: boolean } {
+  const date = shanghaiDate(now);
+  const { year, utc } = parse(date);
+  if (holidaySets.has(year)) {
+    return { session: tradingSession(now), calendarAvailable: true };
+  }
+  const weekday = utc.getUTCDay();
+  if (weekday === 0 || weekday === 6) {
+    return { session: "closed", calendarAvailable: false };
+  }
+  return { session: sessionFromMinutes(shanghaiMinutes(now)), calendarAvailable: false };
 }
 
 /** 连续竞价或集合竞价期间才有实时成交，其余时段行情是上一笔的静态值。 */
 export function isMarketOpen(now: Date = new Date()): boolean {
   const s = tradingSession(now);
   return s === "opening-auction" || s === "morning" || s === "afternoon" || s === "closing-auction";
+}
+
+export function sessionLabel(session: TradingSession): string {
+  switch (session) {
+    case "pre-open":
+      return "盘前";
+    case "opening-auction":
+      return "集合竞价";
+    case "morning":
+      return "上午盘中";
+    case "lunch-break":
+      return "午间休市";
+    case "afternoon":
+      return "下午盘中";
+    case "closing-auction":
+      return "收盘竞价";
+    case "closed":
+      return "已收盘";
+  }
+}
+
+/**
+ * 按交易时段动态调节前端轮询间隔：
+ * - 盘中（集合竞价 / 连续竞价）：保持高频刷新（默认 60s）
+ * - 盘前 / 午间休市：降频为 3 倍（至少 3 分钟）
+ * - 休市 / 已收盘：降频为 10 倍（至少 10 分钟），避免非交易时段浪费上游行情请求
+ */
+export function recommendedPollIntervalMs(now: Date = new Date(), activeMs = 60_000): number {
+  const { session } = safeTradingSession(now);
+  if (session === "opening-auction" || session === "morning" || session === "afternoon" || session === "closing-auction") {
+    return activeMs;
+  }
+  if (session === "pre-open" || session === "lunch-break") {
+    return Math.max(activeMs * 3, 180_000);
+  }
+  return Math.max(activeMs * 10, 600_000);
 }
