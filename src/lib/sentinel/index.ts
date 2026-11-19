@@ -37,27 +37,60 @@ import { riskEngine } from "./risk";
 import { causalityEngine } from "./causality";
 import { journalEngine } from "./journal";
 import { generateSentinelDemoData } from "./demo";
+import { ALERT } from "../thresholds";
+
+export type RunSentinelCoreInput = Partial<ReturnType<typeof generateSentinelDemoData>> & {
+  previousAlerts?: Alert[];
+  dedupeWindowMinutes?: number;
+};
+
+/**
+ * 合并「仍在去重窗口内的历史提醒」与「本轮新触发的提醒」：
+ * - 同一标的若本轮产生了新增信号（通过 alertEngine 去重），保留最新一条替换旧记录；
+ * - 若本轮被去重跳过，继续展示窗口内原提醒，避免前端 60s 轮询时列表突然清空闪跳；
+ * - 超过窗口的旧提醒自动过期移除。
+ */
+export function mergeActiveAlerts(
+  previousAlerts: Alert[],
+  freshAlerts: Alert[],
+  dedupeWindowMinutes: number = ALERT.DEDUPE_WINDOW_MINUTES,
+  nowMs = Date.now(),
+): Alert[] {
+  const windowMs = dedupeWindowMinutes * 60 * 1000;
+  const freshByCode = new Map(freshAlerts.map((alert) => [alert.code, alert]));
+  const kept = previousAlerts.filter((alert) => {
+    if (freshByCode.has(alert.code)) return false;
+    const created = new Date(alert.createdAt).getTime();
+    return Number.isFinite(created) && nowMs - created <= windowMs;
+  });
+  return [...freshAlerts, ...kept].sort((a, b) => b.score - a.score);
+}
 
 /**
  * 9. 一键生成完整 Sentinel 结果
  */
-export function runSentinelCore(input?: Partial<ReturnType<typeof generateSentinelDemoData>>): {
+export function runSentinelCore(input?: RunSentinelCoreInput): {
   marketRadar: MarketRadarResult;
   signals: Signal[];
   alerts: Alert[];
+  freshAlerts: Alert[];
   risk: RiskShieldResult;
   causalityReports: CausalityReport[];
   journal: JournalResult;
 } {
   const demo = generateSentinelDemoData();
+  const { previousAlerts, dedupeWindowMinutes, ...rest } = input ?? {};
   // input 里值为 undefined 的键不能覆盖 demo，否则下游拿到 undefined 直接崩
   const defined = Object.fromEntries(
-    Object.entries(input ?? {}).filter(([, value]) => value !== undefined),
+    Object.entries(rest).filter(([, value]) => value !== undefined),
   ) as Partial<typeof demo>;
   const data = { ...demo, ...defined };
   const marketRadar = marketRadarEngine({ indices: data.indices, stocks: data.stocks, sectors: data.sectors, account: data.account });
   const signals = signalEngine({ stocks: data.stocks, sectors: data.sectors, account: data.account, marketRadar });
-  const alerts = alertEngine({ signals });
+  const freshAlerts = alertEngine({ signals, previousAlerts, dedupeWindowMinutes });
+  const alerts = previousAlerts?.length
+    ? mergeActiveAlerts(previousAlerts, freshAlerts, dedupeWindowMinutes)
+    : freshAlerts;
   const risk = riskEngine({ account: data.account, marketRadar, alerts });
   // 归因报告取提醒分最高的三只，而不是输入顺序的前三只
   const alertScore = new Map<string, number>();
@@ -69,5 +102,5 @@ export function runSentinelCore(input?: Partial<ReturnType<typeof generateSentin
     .map((entry) => entry.stock);
   const causalityReports = topStocks.map((stock) => causalityEngine({ stock, account: data.account, marketRadar, sectors: data.sectors, signals, newsEvents: data.newsEvents }));
   const journal = journalEngine({ account: data.account, marketRadar, alerts, risk });
-  return { marketRadar, signals, alerts, risk, causalityReports, journal };
+  return { marketRadar, signals, alerts, freshAlerts, risk, causalityReports, journal };
 }

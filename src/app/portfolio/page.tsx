@@ -21,6 +21,8 @@ import {
   getDemoTransactions,
   getDemoAccountOverlay,
   applyDemoAccountOverlay,
+  updatePositionPlan,
+  type PositionPlanPatch,
 } from "@/lib/account-storage";
 import {
   downloadLocalLedgerBackup,
@@ -110,6 +112,14 @@ export default function PortfolioPage() {
     downloadLocalLedgerBackup("manual-export");
   };
 
+  const handleUpdatePlan = (stockCode: string, patch: PositionPlanPatch) => {
+    const saved = updatePositionPlan(stockCode, patch);
+    if (!saved) return;
+    setPositions((prev) =>
+      prev.map((p) => (p.stockCode === stockCode ? { ...p, ...patch } : p))
+    );
+  };
+
   if (!account) {
     return (
       <DesktopShell>
@@ -161,7 +171,7 @@ export default function PortfolioPage() {
         {/* Main: Position Table + Sidebar */}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
           {/* Position Table */}
-          <PositionTable positions={positions} delay={1} />
+          <PositionTable positions={positions} onUpdatePlan={handleUpdatePlan} delay={1} />
 
           {/* Sidebar */}
           <div className="space-y-5">
